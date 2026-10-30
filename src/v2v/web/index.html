@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Vāṇī — Real-Time Local Voice-to-Voice AI</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <div class="app-container">
+    <!-- Top Bar -->
+    <header class="top-nav">
+      <div class="brand">
+        <div class="brand-logo">
+          <div class="logo-pulse"></div>
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path>
+            <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+            <line x1="12" y1="19" x2="12" y2="22"></line>
+          </svg>
+        </div>
+        <div class="brand-text">
+          <h1>VĀṆĪ <span class="badge-edge">EDGE AI</span></h1>
+          <p class="subtitle">Sub-300ms Local Voice Agent</p>
+        </div>
+      </div>
+
+      <div class="nav-controls">
+        <div class="telemetry-pill" id="gpu-pill">
+          <span class="dot-online"></span>
+          <span id="gpu-name">RTX 4050</span>
+          <span class="vram-stat" id="vram-stat">~3.1 GB VRAM</span>
+        </div>
+
+        <div class="voice-picker-wrapper">
+          <label for="voice-select">Voice:</label>
+          <select id="voice-select" class="dropdown">
+            <option value="af_heart">Heart (US Female)</option>
+            <option value="af_bella">Bella (US Female)</option>
+            <option value="af_nicole">Nicole (US Female)</option>
+            <option value="am_michael">Michael (US Male)</option>
+            <option value="am_adam">Adam (US Male)</option>
+            <option value="bf_emma">Emma (UK Female)</option>
+            <option value="bm_george">George (UK Male)</option>
+          </select>
+        </div>
+
+        <button id="clear-btn" class="icon-btn" title="Clear Conversation Memory">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M3 6h18"></path>
+            <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"></path>
+            <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"></path>
+          </svg>
+        </button>
+      </div>
+    </header>
+
+    <!-- Main Hero Area: Visualizer & Turn Latency Breakdown -->
+    <main class="main-content">
+      <div class="visualizer-stage">
+        <div class="orb-container">
+          <canvas id="orb-canvas" width="460" height="460"></canvas>
+          <div class="orb-halo"></div>
+          <div class="orb-center-icon" id="orb-center-icon">
+            <svg class="state-icon mic-icon" width="42" height="42" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path>
+              <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+              <line x1="12" y1="19" x2="12" y2="22"></line>
+            </svg>
+          </div>
+        </div>
+
+        <div class="status-indicator">
+          <span class="status-badge" id="status-badge">Click Connect to Start</span>
+          <p class="status-hint" id="status-hint">Direct local full-duplex audio stream via WebSocket</p>
+        </div>
+
+        <div class="action-buttons">
+          <button id="connect-btn" class="btn btn-primary">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polygon points="5 3 19 12 5 21 5 3"></polygon>
+            </svg>
+            <span id="connect-btn-text">Start Voice Agent</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Real-Time Latency Breakdown & Waterfall Panel -->
+      <section class="telemetry-panel">
+        <div class="panel-header">
+          <h2>LIVE PIPELINE LATENCY</h2>
+          <span class="target-chip">TARGET: &lt; 300ms PROCESSING</span>
+        </div>
+
+        <div class="latency-grid">
+          <div class="metric-card" id="card-endpoint">
+            <div class="metric-label">VAD Endpoint</div>
+            <div class="metric-val" id="val-endpoint">-- ms</div>
+            <div class="metric-sub">Turn Detection</div>
+          </div>
+          <div class="metric-card" id="card-stt">
+            <div class="metric-label">Whisper STT</div>
+            <div class="metric-val" id="val-stt">-- ms</div>
+            <div class="metric-sub">Distil-Large-v3</div>
+          </div>
+          <div class="metric-card" id="card-llm">
+            <div class="metric-label">LLM 1st Tok</div>
+            <div class="metric-val" id="val-llm">-- ms</div>
+            <div class="metric-sub">Qwen2.5-1.5B</div>
+          </div>
+          <div class="metric-card" id="card-phrase">
+            <div class="metric-label">1st Phrase Cut</div>
+            <div class="metric-val" id="val-phrase">-- ms</div>
+            <div class="metric-sub">Chunker Engine</div>
+          </div>
+          <div class="metric-card" id="card-tts">
+            <div class="metric-label">Kokoro TTS</div>
+            <div class="metric-val" id="val-tts">-- ms</div>
+            <div class="metric-sub">First Audio Chunk</div>
+          </div>
+          <div class="metric-card highlight-card" id="card-total">
+            <div class="metric-label">Processing Turnaround</div>
+            <div class="metric-val" id="val-total">-- ms</div>
+            <div class="metric-sub" id="val-full-sub">0 ms after speech end</div>
+          </div>
+        </div>
+
+        <!-- Waterfall Timeline Progress Bar -->
+        <div class="waterfall-container">
+          <div class="waterfall-bar" id="waterfall-bar">
+            <div class="stage-bar stage-stt" id="bar-stt" title="STT"></div>
+            <div class="stage-bar stage-llm" id="bar-llm" title="LLM TTFT"></div>
+            <div class="stage-bar stage-phrase" id="bar-phrase" title="Phrase Chunker"></div>
+            <div class="stage-bar stage-tts" id="bar-tts" title="Kokoro TTS"></div>
+          </div>
+          <div class="waterfall-legend">
+            <span><i class="dot dot-stt"></i> STT</span>
+            <span><i class="dot dot-llm"></i> LLM TTFT</span>
+            <span><i class="dot dot-phrase"></i> 1st Clause</span>
+            <span><i class="dot dot-tts"></i> TTS Synth</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Live Dialogue Feed -->
+      <section class="dialogue-panel">
+        <div class="panel-header">
+          <h2>CONVERSATION TRANSCRIPT</h2>
+          <button type="button" id="barge-in-toggle" class="barge-in-badge" title="Click to toggle barge-in (interruption)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"></path>
+            </svg>
+            <span id="barge-in-text">Barge-in Active</span>
+          </button>
+        </div>
+        <div class="messages-container" id="messages-container">
+          <div class="system-welcome">
+            <p>Welcome! Speak into your microphone once connected. Your voice never leaves this machine.</p>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- Footer -->
+    <footer class="app-footer">
+      <div class="footer-left">
+        <span>Major Project: Real-Time Edge Voice-to-Voice AI</span>
+        <span class="sep">•</span>
+        <span>IILM University</span>
+      </div>
+      <div class="footer-right">
+        <span>Zero Cloud • Zero Cost • 100% Offline</span>
+      </div>
+    </footer>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

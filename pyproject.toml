@@ -1,0 +1,55 @@
+[project]
+name = "voice-to-voice"
+version = "0.1.0"
+description = "Real-time, fully local voice-to-voice AI agent (Silero VAD -> Whisper -> Qwen2.5 -> Kokoro)"
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "numpy>=1.26",
+    "pyyaml>=6.0",
+    "sounddevice>=0.4.7",
+    "soundfile>=0.12",
+    # --- VAD ---
+    "torch>=2.4",
+    "torchaudio>=2.4",
+    "silero-vad>=5.1",
+    # --- STT ---
+    "faster-whisper>=1.1",
+    # --- LLM (default backend talks to the local Ollama server) ---
+    "ollama>=0.4",
+    # --- TTS ---
+    "transformers>=4.41,<4.47",
+    "kokoro>=0.9.4",
+    "misaki[en]>=0.9.4",
+    "en-core-web-sm",
+    # --- Web app (browser <-> server over WebSocket) ---
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+]
+
+[project.optional-dependencies]
+# Alternative in-process LLM backend (needs a CUDA build on Windows; see README.md)
+llamacpp = ["llama-cpp-python>=0.3"]
+
+[project.scripts]
+v2v = "v2v.main:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/v2v"]
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+# CUDA builds of PyTorch (cu121 works with NVIDIA driver >= 525, yours is 546)
+[[tool.uv.index]]
+name = "pytorch-cu121"
+url = "https://download.pytorch.org/whl/cu121"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu121" }
+torchaudio = { index = "pytorch-cu121" }

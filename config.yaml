@@ -1,0 +1,64 @@
+# Voice-to-Voice agent configuration.
+# Every component is swappable from here without touching code.
+
+audio:
+  input_device: null      # null = system default. Run `run.bat run v2v --list-devices` to see options
+  output_device: null
+  sample_rate: 16000      # Silero VAD + Whisper both want 16 kHz mono
+  frame_samples: 512      # 32 ms frames (Silero v5 requires exactly 512 @ 16 kHz)
+
+vad:
+  threshold: 0.5          # speech probability to count a frame as voiced
+  min_speech_ms: 96       # voiced audio needed before we treat it as a real utterance
+  min_silence_ms: 350     # natural conversational pause (avoids cutting user off mid-thought)
+  extended_silence_ms: 650 # extended silence window for trailing connectors (and, or, because...)
+  filler_silence_ms: 900  # silence required to discard hesitation sounds (mm, uh)
+  pre_roll_ms: 300        # audio kept from before speech onset (avoids clipped first word)
+  max_utterance_s: 20
+
+stt:
+  model: small.en         # small.en (~120ms, for 300-600ms latency) | distil-large-v3 (~380ms)
+  device: cuda
+  compute_type: int8_float16
+  language: en
+  beam_size: 1
+
+llm:
+  backend: llamacpp       # llamacpp (direct in-process GPU) | ollama
+  host: http://127.0.0.1:11434
+  keep_alive: -1          # keep model resident in VRAM
+  temperature: 0.7
+  max_tokens: 160
+  num_ctx: 2048
+  history_turns: 24
+  system_prompt: >
+
+    You are Vāṇī, a helpful, natural conversational voice assistant running 100% locally and offline.
+    Spoken dialogue rules:
+    1. Answer in exactly ONE short, crisp sentence (strictly under 15 words).
+    2. If the user gives an acknowledgment like 'alright', 'okay', 'cool', 'I see', or 'got it', respond with just a quick word like 'Got it.' or 'Sure thing.'
+    3. You have NO internet access, news feeds, weather feeds, music players, or reminders. Never promise or pretend to fetch news, play music, or check weather.
+    4. Never output brackets, placeholders like '[Insert news item]', bullet points, or markdown.
+
+  # used only when backend == llamacpp
+  llamacpp_model_path: models/qwen2.5-1.5b-instruct-q4_k_m.gguf
+  llamacpp_n_gpu_layers: -1
+
+tts:
+  lang_code: a            # a = American English, b = British English
+  voice: af_heart         # others: af_bella, am_michael, bf_emma, bm_george ...
+  speed: 1.0
+  device: cuda
+
+chunker:
+  first_min_chars: 12     # emit the first phrase early (at a comma) for low latency
+  min_chars: 60           # later phrases wait for longer clauses (better prosody)
+
+pipeline:
+  barge_in: true          # true = you can interrupt the agent. Web mode has echo cancellation!
+  echo_tail_ms: 250       # ignore mic this long after speech (safety margin)
+  log_csv: logs/latency.csv
+
+server:
+  host: "127.0.0.1"
+  port: 8000
