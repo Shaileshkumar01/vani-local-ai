@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 
 from .config import ChunkerCfg
+from .tools.registry import strip_tool_tags
 
 _SENTENCE_END = re.compile(r"[.!?]+[\"')\]]*\s|\n")
 _CLAUSE_END = re.compile(r"[,;:\u2014]\s")
@@ -12,6 +13,7 @@ _MARKDOWN = re.compile(r"[*_#`~>|]+")
 
 
 def clean_for_tts(text: str) -> str:
+    text = strip_tool_tags(text)
     text = _MARKDOWN.sub("", text)
     return re.sub(r"\s+", " ", text).strip()
 
@@ -45,6 +47,8 @@ class PhraseChunker:
         return phrase or None
 
     def _find_cut(self) -> int | None:
+        if self.buf.rfind("[") > self.buf.rfind("]"):
+            return None
         min_len = self.cfg.first_min_chars if self.emitted == 0 else self.cfg.min_chars
         # 1. Punctuation sentence end
         for m in _SENTENCE_END.finditer(self.buf):

@@ -21,6 +21,7 @@ from .endpointing import TurnDecision, analyze_transcript, evaluate_endpoint
 from .llm import Conversation, make_llm
 from .metrics import MetricsLog, TurnMetrics
 from .stt import WhisperSTT
+from .tools import ToolRegistry, strip_tool_tags
 from .tts import KokoroTTS
 from .vad import Endpointer, SileroVAD, Utterance
 
@@ -57,6 +58,7 @@ class VoicePipeline:
         _step(f"ready in {time.perf_counter() - t0:.1f}s")
 
         self.conv = Conversation(cfg.llm.system_prompt, cfg.llm.history_turns)
+        self.tools = ToolRegistry()
         self.mic = MicStream(cfg.audio, self.mic_q)
         self.speaker = Speaker(
             cfg.audio, self.tts.sample_rate, self.state, self.play_q,
@@ -135,6 +137,17 @@ class VoicePipeline:
             self.state.mark_generating()
             m.user_text = text
 
+            last_assistant = self.conv.history[-1]["content"] if self.conv.history else ""
+            fast_res = self.tools.match_fast_intent(text, last_assistant_text=last_assistant)
+            if fast_res is not None and fast_res.spoken_response:
+                m.t_llm_first_token = time.perf_counter()
+                m.t_first_phrase = m.t_llm_first_token
+                print(f"\033[35mAgent:\033[0m {fast_res.spoken_response}", flush=True)
+                self.tts_q.put((tid, fast_res.spoken_response, m, True))
+                m.reply_text = fast_res.spoken_response
+                self.conv.add(text, m.reply_text)
+                continue
+
             chunker = PhraseChunker(self.cfg.chunker)
 
             reply: list[str] = []
@@ -157,11 +170,14 @@ class VoicePipeline:
             if tail and m.t_first_phrase is None:
                 m.t_first_phrase = time.perf_counter()
             self.tts_q.put((tid, tail, m, True))
-            m.reply_text = "".join(reply).strip()
+            raw_reply = "".join(reply).strip()
+            if raw_reply and self.state.is_current(tid):
+                self.tools.execute_inline_tags(raw_reply)
+            m.reply_text = strip_tool_tags(raw_reply)
             if m.reply_text and self.state.is_current(tid):
                 self.conv.add(text, m.reply_text)
             else:
-                partial = ("".join(reply).strip() + " ... [interrupted]") if reply else "[interrupted]"
+                partial = (m.reply_text + " ... [interrupted]") if m.reply_text else "[interrupted]"
                 self.conv.add(text, partial)
 
 

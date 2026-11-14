@@ -26,6 +26,7 @@ from .config import Config
 from .endpointing import TurnDecision, analyze_transcript, evaluate_endpoint
 from .engine import Engine
 from .metrics import TurnMetrics
+from .tools import strip_tool_tags
 from .vad import Utterance
 
 logger = logging.getLogger("v2v.session")
@@ -204,9 +205,24 @@ class VoiceSession:
             m.user_text = text
             self._send_json_sync({"type": "user_transcript", "text": text, "turn_id": tid})
 
+            # 2b. Fast-path PC tool router (0ms LLM bypass for explicit commands)
+            last_assistant = self.conv.history[-1]["content"] if self.conv.history else ""
+            fast_res = self.engine.tools.match_fast_intent(text, last_assistant_text=last_assistant)
+            if fast_res is not None and fast_res.spoken_response:
+                m.t_llm_first_token = time.perf_counter()
+                m.t_first_phrase = m.t_llm_first_token
+                self._send_json_sync({"type": "agent_token", "token": fast_res.spoken_response, "turn_id": tid})
+                self.tts_q.put((tid, fast_res.spoken_response, m, False))
+                self.tts_q.put((tid, None, m, True))
+                m.reply_text = fast_res.spoken_response
+                self.conv.add(text, m.reply_text)
+                continue
+
             # 3. Stream LLM tokens
             chunker = PhraseChunker(self.cfg.chunker)
             reply_tokens: list[str] = []
+            ui_tag_buf: str = ""
+            in_tag: bool = False
 
             for tok in self.engine.llm.stream(self.conv.messages_for(text)):
                 if not self.state.is_current(tid):
@@ -215,13 +231,35 @@ class VoiceSession:
                     m.t_llm_first_token = time.perf_counter()
 
                 reply_tokens.append(tok)
-                self._send_json_sync({"type": "agent_token", "token": tok, "turn_id": tid})
+
+                # Filter out [TOOL: ...] tags from UI agent_token stream
+                ui_tag_buf += tok
+                if "[" in ui_tag_buf:
+                    in_tag = True
+                    before, _, after = ui_tag_buf.partition("[")
+                    if before:
+                        self._send_json_sync({"type": "agent_token", "token": before, "turn_id": tid})
+                    ui_tag_buf = "[" + after
+                    if "]" in ui_tag_buf:
+                        cleaned_seg = strip_tool_tags(ui_tag_buf)
+                        if cleaned_seg:
+                            self._send_json_sync({"type": "agent_token", "token": cleaned_seg, "turn_id": tid})
+                        ui_tag_buf = ""
+                        in_tag = False
+                elif not in_tag:
+                    self._send_json_sync({"type": "agent_token", "token": ui_tag_buf, "turn_id": tid})
+                    ui_tag_buf = ""
 
                 # Cut into speakable phrases as tokens arrive
                 for phrase in chunker.push(tok):
                     if m.t_first_phrase is None:
                         m.t_first_phrase = time.perf_counter()
                     self.tts_q.put((tid, phrase, m, False))
+
+            if ui_tag_buf and self.state.is_current(tid):
+                cleaned_tail = strip_tool_tags(ui_tag_buf)
+                if cleaned_tail:
+                    self._send_json_sync({"type": "agent_token", "token": cleaned_tail, "turn_id": tid})
 
             # Flush any remaining text in chunker
             tail = chunker.flush()
@@ -233,12 +271,15 @@ class VoiceSession:
             # Mark end of phrases for this turn
             self.tts_q.put((tid, None, m, True))
 
-            m.reply_text = "".join(reply_tokens).strip()
+            raw_reply = "".join(reply_tokens).strip()
+            if raw_reply and self.state.is_current(tid):
+                self.engine.tools.execute_inline_tags(raw_reply)
+            m.reply_text = strip_tool_tags(raw_reply)
             if m.reply_text and self.state.is_current(tid):
                 self.conv.add(text, m.reply_text)
             else:
                 # Turn was interrupted: preserve user prompt and partial reply in memory so context is retained
-                partial = ("".join(reply_tokens).strip() + " ... [interrupted]") if reply_tokens else "[interrupted]"
+                partial = (m.reply_text + " ... [interrupted]") if m.reply_text else "[interrupted]"
                 self.conv.add(text, partial)
 
 

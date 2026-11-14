@@ -13,6 +13,7 @@ from .config import Config
 from .llm import Conversation, LLMBackend, make_llm
 from .metrics import MetricsLog
 from .stt import WhisperSTT
+from .tools import ToolRegistry
 from .tts import KokoroTTS
 from .vad import Endpointer, SileroVAD
 
@@ -23,6 +24,7 @@ class Engine:
     def __init__(self, cfg: Config):
         self.cfg = cfg
         self.metrics = MetricsLog(cfg.pipeline.log_csv)
+        self.tools = ToolRegistry()
 
         print("\033[36m[Engine]\033[0m Initializing shared models...", flush=True)
         t0 = time.perf_counter()
