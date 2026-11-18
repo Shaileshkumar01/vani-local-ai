@@ -15,6 +15,7 @@ class ToolResult:
     message: str
     spoken_response: str | None = None
     data: dict[str, Any] | None = None
+    llm_context: str | None = None
 
 
 class BaseTool(ABC):

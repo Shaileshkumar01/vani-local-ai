@@ -51,6 +51,7 @@ class VoiceSession:
         self.active = True
         self.current_metrics: TurnMetrics | None = None
         self.playback_start_t = 0.0
+        self.noise_cancel_enabled: bool = True
 
         # Background worker threads
         self.vad_thread = threading.Thread(target=self._vad_worker, name="session-vad", daemon=True)
@@ -74,6 +75,12 @@ class VoiceSession:
         if not self.active:
             return
         arr = np.frombuffer(pcm_data, dtype=np.int16).astype(np.float32) / 32768.0
+        if self.noise_cancel_enabled and arr.size > 0:
+            # Remove DC offset + soft-gate low-level steady fan/room hum (< ~-42 dBFS)
+            arr = arr - float(np.mean(arr))
+            rms = float(np.sqrt(np.mean(arr * arr)))
+            if rms < 0.0075:
+                arr = arr * 0.15
         # If client sends in variable size, slice into 512-sample frames for Silero
         frame_len = self.cfg.audio.frame_samples
         for i in range(0, len(arr), frame_len):
@@ -205,10 +212,13 @@ class VoiceSession:
             m.user_text = text
             self._send_json_sync({"type": "user_transcript", "text": text, "turn_id": tid})
 
-            # 2b. Fast-path PC tool router (0ms LLM bypass for explicit commands)
+            # 2b. Fast-path PC tool router (0ms LLM bypass for explicit commands, or live context injection)
             last_assistant = self.conv.history[-1]["content"] if self.conv.history else ""
-            fast_res = self.engine.tools.match_fast_intent(text, last_assistant_text=last_assistant)
-            if fast_res is not None and fast_res.spoken_response:
+            fast_res = self.engine.tools.match_fast_intent(
+                text,
+                last_assistant_text=last_assistant,
+            )
+            if fast_res is not None and fast_res.spoken_response and not fast_res.llm_context:
                 m.t_llm_first_token = time.perf_counter()
                 m.t_first_phrase = m.t_llm_first_token
                 self._send_json_sync({"type": "agent_token", "token": fast_res.spoken_response, "turn_id": tid})
@@ -218,13 +228,30 @@ class VoiceSession:
                 self.conv.add(text, m.reply_text)
                 continue
 
+            llm_prompt_text = f"{text}\n\n{fast_res.llm_context}" if (fast_res and fast_res.llm_context) else text
+
+            # 2c. Live PC & background-task context injection when asking PC/app/task follow-ups
+            if fast_res is None:
+                _pc_keywords = {
+                    "app", "apps", "application", "applications", "window", "windows",
+                    "open", "opened", "pop", "popup", "pop-up", "background", "running", "desktop",
+                    "teams", "whatsapp", "spotify", "chrome", "brave", "edge", "code",
+                    "task", "tasks", "cpu", "ram", "memory", "battery", "pc", "computer", "laptop",
+                }
+                words = set(text.lower().replace("?", " ").replace(".", " ").replace(",", " ").replace("-", " ").split())
+                if bool(words & _pc_keywords) or "pop-up" in text.lower():
+                    screen_tool = self.engine.tools.get("screen_tasks")
+                    if screen_tool and hasattr(screen_tool, "get_live_pc_context_snippet"):
+                        ctx = screen_tool.get_live_pc_context_snippet(user_text=text)
+                        llm_prompt_text = f"{text}\n\n{ctx}"
+
             # 3. Stream LLM tokens
             chunker = PhraseChunker(self.cfg.chunker)
             reply_tokens: list[str] = []
             ui_tag_buf: str = ""
             in_tag: bool = False
 
-            for tok in self.engine.llm.stream(self.conv.messages_for(text)):
+            for tok in self.engine.llm.stream(self.conv.messages_for(llm_prompt_text)):
                 if not self.state.is_current(tid):
                     break
                 if m.t_llm_first_token is None:

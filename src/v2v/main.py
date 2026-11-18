@@ -11,6 +11,8 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="Real-time local voice-to-voice agent")
     ap.add_argument("--config", default="config.yaml", help="Path to config.yaml")
     ap.add_argument("--cli", action="store_true", help="Run in terminal mode using sounddevice (headphones recommended)")
+    ap.add_argument("--app", action="store_true", help="Launch as a standalone Windows Desktop App window")
+    ap.add_argument("--mini", action="store_true", help="Launch Desktop App in compact Mini-Orb widget mode")
     ap.add_argument("--list-devices", action="store_true", help="Show audio devices and exit")
     args = ap.parse_args()
 
@@ -34,6 +36,10 @@ def main() -> None:
         from .pipeline import VoicePipeline
 
         VoicePipeline(cfg).run()
+    elif args.app or args.mini:
+        from .desktop import run_desktop_app
+
+        run_desktop_app(cfg, mini=args.mini)
     else:
         from .server import run_server
 

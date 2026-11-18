@@ -51,7 +51,7 @@ app.add_middleware(
 @app.get("/")
 async def get_index():
     index_path = WEB_DIR / "index.html"
-    return FileResponse(index_path)
+    return FileResponse(index_path, headers={"Cache-Control": "no-cache"})
 
 
 @app.get("/api/status")
@@ -115,6 +115,8 @@ async def websocket_endpoint(ws: WebSocket):
     try:
         while True:
             msg = await ws.receive()
+            if msg.get("type") == "websocket.disconnect":
+                break
             if "bytes" in msg and msg["bytes"]:
                 session.feed_pcm16(msg["bytes"])
             elif "text" in msg and msg["text"]:
@@ -134,6 +136,10 @@ async def websocket_endpoint(ws: WebSocket):
                         enabled = bool(data.get("enabled", True))
                         _cfg.pipeline.barge_in = enabled
                         await ws.send_json({"type": "barge_in_updated", "enabled": enabled})
+                    elif cmd == "set_noise_cancel":
+                        enabled = bool(data.get("enabled", True))
+                        session.noise_cancel_enabled = enabled
+                        await ws.send_json({"type": "noise_cancel_updated", "enabled": enabled})
                     elif cmd == "set_voice":
                         v = data.get("voice")
                         if v:

@@ -16,3 +16,4 @@ bench_audio/
 Thumbs.db
 .vscode/
 .idea/
+*.lnk

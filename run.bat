@@ -7,6 +7,8 @@ set UV_PROJECT_ENVIRONMENT=%USERPROFILE%\.venvs\voice-to-voice
 
 set ARGS=%*
 if "%~1"=="" set ARGS=run --no-sync v2v
+if "%~1"=="app" set ARGS=run --no-sync v2v --app %2 %3 %4
+if "%~1"=="mini" set ARGS=run --no-sync v2v --app --mini
 if "%~1"=="run" set ARGS=run --no-sync %2 %3 %4 %5 %6 %7 %8 %9
 
 where uv >nul 2>nul

@@ -3,11 +3,14 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#090b12">
   <title>Vāṇī — Real-Time Local Voice-to-Voice AI</title>
+  <link rel="icon" type="image/svg+xml" href="/static/icon.svg">
+  <link rel="manifest" href="/static/manifest.json">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/styles.css">
+  <link rel="stylesheet" href="/static/styles.css?v=6">
 </head>
 <body>
   <div class="app-container">
@@ -48,6 +51,15 @@
           </select>
         </div>
 
+        <button id="mini-mode-btn" class="icon-btn" title="Toggle Compact Mini-Orb Mode (Ctrl+M)">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="4 14 10 14 10 20"></polyline>
+            <polyline points="20 10 14 10 14 4"></polyline>
+            <line x1="14" y1="10" x2="21" y2="3"></line>
+            <line x1="3" y1="21" x2="10" y2="14"></line>
+          </svg>
+        </button>
+
         <button id="clear-btn" class="icon-btn" title="Clear Conversation Memory">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M3 6h18"></path>
@@ -76,6 +88,10 @@
         <div class="status-indicator">
           <span class="status-badge" id="status-badge">Click Connect to Start</span>
           <p class="status-hint" id="status-hint">Direct local full-duplex audio stream via WebSocket</p>
+        </div>
+
+        <div class="mini-transcript-preview" id="mini-transcript-preview">
+          Speak into your mic or press Spacebar to toggle session.
         </div>
 
         <div class="action-buttons">
@@ -149,12 +165,21 @@
       <section class="dialogue-panel">
         <div class="panel-header">
           <h2>CONVERSATION TRANSCRIPT</h2>
-          <button type="button" id="barge-in-toggle" class="barge-in-badge" title="Click to toggle barge-in (interruption)">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"></path>
-            </svg>
-            <span id="barge-in-text">Barge-in Active</span>
-          </button>
+          <div style="display: flex; gap: 0.5rem; align-items: center;">
+            <button type="button" id="noise-cancel-toggle" class="barge-in-badge" title="Toggle microphone Noise Cancellation & Noise Gate">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
+                <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+              </svg>
+              <span id="noise-cancel-text">Noise Cancel: ON</span>
+            </button>
+            <button type="button" id="barge-in-toggle" class="barge-in-badge" title="Click to toggle barge-in (interruption)">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"></path>
+              </svg>
+              <span id="barge-in-text">Barge-in Active</span>
+            </button>
+          </div>
         </div>
         <div class="messages-container" id="messages-container">
           <div class="system-welcome">
@@ -177,6 +202,6 @@
     </footer>
   </div>
 
-  <script src="/static/app.js"></script>
+  <script src="/static/app.js?v=6"></script>
 </body>
 </html>

@@ -15,6 +15,7 @@ class VoiceClient {
     this.nextPlayTime = 0;
     this.activeSourceNodes = [];
     this.bargeInEnabled = true;
+    this.noiseCancelEnabled = true;
 
 
     this.state = 'disconnected'; // disconnected, ready, listening, thinking, speaking
@@ -39,10 +40,40 @@ class VoiceClient {
     this.orbContainer = document.querySelector('.orb-container');
     this.bargeInToggle = document.getElementById('barge-in-toggle');
     this.bargeInText = document.getElementById('barge-in-text');
+    this.noiseCancelToggle = document.getElementById('noise-cancel-toggle');
+    this.noiseCancelText = document.getElementById('noise-cancel-text');
+    this.miniModeBtn = document.getElementById('mini-mode-btn');
+    this.miniPreviewEl = document.getElementById('mini-transcript-preview');
   }
 
   initEventListeners() {
     this.connectBtn.addEventListener('click', () => this.toggleConnection());
+
+    if (this.miniModeBtn) {
+      this.miniModeBtn.addEventListener('click', () => this.toggleMiniMode());
+    }
+
+    window.addEventListener('keydown', (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'm') {
+        e.preventDefault();
+        this.toggleMiniMode();
+      } else if (e.code === 'Space' && e.target === document.body) {
+        e.preventDefault();
+        this.toggleConnection();
+      }
+    });
+
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('mini') === '1') {
+      document.body.classList.add('mini-mode');
+    }
+    if (params.get('app') === '1') {
+      setTimeout(() => {
+        if (this.state === 'disconnected') {
+          this.start();
+        }
+      }, 600);
+    }
 
     this.voiceSelect.addEventListener('change', (e) => {
       if (this.ws && this.ws.readyState === WebSocket.OPEN) {
@@ -69,6 +100,17 @@ class VoiceClient {
         }
       });
     }
+
+    if (this.noiseCancelToggle) {
+      this.noiseCancelToggle.addEventListener('click', async () => {
+        this.noiseCancelEnabled = !this.noiseCancelEnabled;
+        this.updateNoiseCancelUI();
+        await this.applyNoiseCancelConstraints();
+        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+          this.ws.send(JSON.stringify({ type: 'set_noise_cancel', enabled: this.noiseCancelEnabled }));
+        }
+      });
+    }
   }
 
   async pollSystemStatus() {
@@ -92,6 +134,35 @@ class VoiceClient {
     setTimeout(() => this.pollSystemStatus(), 5000);
   }
 
+  updateNoiseCancelUI() {
+    if (!this.noiseCancelToggle || !this.noiseCancelText) return;
+    if (this.noiseCancelEnabled) {
+      this.noiseCancelToggle.classList.remove('safe-mode');
+      this.noiseCancelText.textContent = 'Noise Cancel: ON';
+      this.noiseCancelToggle.title = 'Noise Cancellation & Noise Gate active. Click to disable for raw mic audio.';
+    } else {
+      this.noiseCancelToggle.classList.add('safe-mode');
+      this.noiseCancelText.textContent = 'Noise Cancel: OFF';
+      this.noiseCancelToggle.title = 'Noise Cancellation OFF (raw mic audio). Click to enable.';
+    }
+  }
+
+  async applyNoiseCancelConstraints() {
+    if (!this.micStream) return;
+    const track = this.micStream.getAudioTracks()[0];
+    if (track && typeof track.applyConstraints === 'function') {
+      try {
+        await track.applyConstraints({
+          echoCancellation: true,
+          noiseSuppression: this.noiseCancelEnabled,
+          autoGainControl: this.noiseCancelEnabled,
+        });
+      } catch (e) {
+        console.warn('Could not update mic noiseSuppression constraint live:', e);
+      }
+    }
+  }
+
   updateBargeInUI() {
     if (!this.bargeInToggle || !this.bargeInText) return;
     if (this.bargeInEnabled) {
@@ -105,9 +176,20 @@ class VoiceClient {
     }
   }
 
+  toggleMiniMode() {
+    const isMini = document.body.classList.toggle('mini-mode');
+    try {
+      if (isMini) {
+        window.resizeTo(380, 540);
+      } else {
+        window.resizeTo(1220, 840);
+      }
+    } catch (e) {}
+  }
+
   // ------------------------------------------------------------- Connection
   async toggleConnection() {
-    if (this.state === 'disconnected') {
+    if (this.state === 'disconnected' || !this.ws) {
       await this.start();
     } else {
       this.stop();
@@ -115,6 +197,12 @@ class VoiceClient {
   }
 
   async start() {
+    // Ensure any previous session resources are cleanly torn down first
+    this.stop(true);
+    this.currentTurnId = 0;
+    this.nextPlayTime = 0;
+    this.currentAgentBubble = null;
+
     this.updateStatus('connecting', 'Connecting to local edge AI engine...');
     try {
       // 1. Initialize AudioContext (must happen on user gesture)
@@ -136,25 +224,33 @@ class VoiceClient {
       // 3. Connect WebSocket
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
       const wsUrl = `${protocol}//${window.location.host}/ws`;
-      this.ws = new WebSocket(wsUrl);
-      this.ws.binaryType = 'arraybuffer';
+      const ws = new WebSocket(wsUrl);
+      ws.binaryType = 'arraybuffer';
+      this.ws = ws;
 
-      this.ws.onopen = async () => {
+      ws.onopen = async () => {
+        if (this.ws !== ws) return;
         await this.startMicrophone();
         this.updateStatus('ready', 'Connected! Speak into your microphone...');
         this.connectBtn.classList.add('btn-active');
         this.connectBtnText.textContent = 'Stop Session';
-        this.ws.send(JSON.stringify({ type: 'set_barge_in', enabled: this.bargeInEnabled }));
+        ws.send(JSON.stringify({ type: 'set_barge_in', enabled: this.bargeInEnabled }));
+        ws.send(JSON.stringify({ type: 'set_noise_cancel', enabled: this.noiseCancelEnabled }));
       };
 
-      this.ws.onmessage = (event) => this.handleMessage(event);
+      ws.onmessage = (event) => {
+        if (this.ws !== ws) return;
+        this.handleMessage(event);
+      };
 
-      this.ws.onclose = () => {
+      ws.onclose = () => {
+        if (this.ws !== ws) return;
         this.stop();
         this.updateStatus('disconnected', 'Session closed. Click start to reconnect.');
       };
 
-      this.ws.onerror = (err) => {
+      ws.onerror = (err) => {
+        if (this.ws !== ws) return;
         console.error('WebSocket error:', err);
         this.updateStatus('disconnected', 'Connection error.');
       };
@@ -165,24 +261,56 @@ class VoiceClient {
     }
   }
 
-  stop() {
+  stop(silent = false) {
     if (this.workletNode) {
-      this.workletNode.disconnect();
+      try {
+        if (this.workletNode.port) {
+          this.workletNode.port.onmessage = null;
+        }
+        this.workletNode.onaudioprocess = null;
+        this.workletNode.disconnect();
+      } catch (e) {}
       this.workletNode = null;
+    }
+    if (this.micSource) {
+      try {
+        this.micSource.disconnect();
+      } catch (e) {}
+      this.micSource = null;
     }
     if (this.micStream) {
       this.micStream.getTracks().forEach((t) => t.stop());
       this.micStream = null;
     }
     if (this.ws) {
-      this.ws.close();
+      const oldWs = this.ws;
       this.ws = null;
+      oldWs.onopen = null;
+      oldWs.onmessage = null;
+      oldWs.onclose = null;
+      oldWs.onerror = null;
+      try {
+        oldWs.close();
+      } catch (e) {}
     }
-    this.stopAllAudio();
+    this.stopAllAudio(false);
+    if (this.audioCtx) {
+      const oldCtx = this.audioCtx;
+      this.audioCtx = null;
+      this.micAnalyser = null;
+      this.speakerAnalyser = null;
+      try {
+        oldCtx.close();
+      } catch (e) {}
+    }
+    this.currentTurnId = 0;
+    this.nextPlayTime = 0;
     this.state = 'disconnected';
     this.connectBtn.classList.remove('btn-active');
     this.connectBtnText.textContent = 'Start Voice Agent';
-    this.updateStatus('disconnected', 'Click Start Voice Agent to begin');
+    if (!silent) {
+      this.updateStatus('disconnected', 'Click Start Voice Agent to begin');
+    }
   }
 
   // ------------------------------------------------------------- Microphone
@@ -190,19 +318,21 @@ class VoiceClient {
     this.micStream = await navigator.mediaDevices.getUserMedia({
       audio: {
         echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
+        noiseSuppression: this.noiseCancelEnabled,
+        autoGainControl: this.noiseCancelEnabled,
         channelCount: 1,
+        sampleRate: 16000,
       },
     });
 
     const micSource = this.audioCtx.createMediaStreamSource(this.micStream);
+    this.micSource = micSource;
     micSource.connect(this.micAnalyser);
 
 
     // Try AudioWorklet first, with ScriptProcessor fallback
     try {
-      await this.audioCtx.audioWorklet.addModule('/static/mic-worklet.js');
+      await this.audioCtx.audioWorklet.addModule('/static/mic-worklet.js?v=3');
       this.workletNode = new AudioWorkletNode(this.audioCtx, 'mic-downsampler');
       this.workletNode.port.onmessage = (event) => {
         if (this.ws && this.ws.readyState === WebSocket.OPEN) {
@@ -370,19 +500,20 @@ class VoiceClient {
     source.onended = () => {
       const idx = this.activeSourceNodes.indexOf(source);
       if (idx !== -1) this.activeSourceNodes.splice(idx, 1);
-      if (this.activeSourceNodes.length === 0) {
+      if (this.activeSourceNodes.length === 0 && this.ws && this.state !== 'disconnected') {
         this.updateStatus('ready', 'Ready for next turn');
-        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+        if (this.ws.readyState === WebSocket.OPEN) {
           this.ws.send(JSON.stringify({ type: 'playback_end' }));
         }
       }
     };
   }
 
-  stopAllAudio() {
+  stopAllAudio(resetStatus = true) {
     const wasPlaying = this.activeSourceNodes.length > 0;
     for (const src of this.activeSourceNodes) {
       try {
+        src.onended = null;
         src.stop();
         src.disconnect();
       } catch (e) {}
@@ -394,7 +525,9 @@ class VoiceClient {
     if (wasPlaying && this.ws && this.ws.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify({ type: 'playback_end' }));
     }
-    this.updateStatus('ready', 'Ready for next turn');
+    if (resetStatus && this.state !== 'disconnected') {
+      this.updateStatus('ready', 'Ready for next turn');
+    }
   }
 
   // ------------------------------------------------------------- UI Updates
@@ -429,6 +562,10 @@ class VoiceClient {
     const welcome = this.messagesContainer.querySelector('.system-welcome');
     if (welcome) welcome.remove();
 
+    if (this.miniPreviewEl) {
+      this.miniPreviewEl.textContent = `You: "${text}"`;
+    }
+
     const bubble = document.createElement('div');
     bubble.className = 'chat-bubble user';
     bubble.innerHTML = `
@@ -456,6 +593,9 @@ class VoiceClient {
     const contentSpan = this.currentAgentBubble.querySelector('.token-content');
     if (contentSpan) {
       contentSpan.textContent += tok;
+      if (this.miniPreviewEl) {
+        this.miniPreviewEl.textContent = contentSpan.textContent;
+      }
       this.scrollDialogue();
     }
   }

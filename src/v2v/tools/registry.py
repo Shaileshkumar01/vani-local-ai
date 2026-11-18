@@ -7,6 +7,13 @@ import re
 from typing import Any
 
 from .base import BaseTool, ToolResult
+from .code_gen import CodeGenTool
+from .comms import CommsTool
+from .doc_rag import DocRAGTool
+from .file_manager import FileManagerTool
+from .memory_timer import MemoryTimerTool
+from .pc_agent import PCAgentTool
+from .screen_tasks import ScreenTasksTool
 from .spotify import SpotifyTool
 
 logger = logging.getLogger("v2v.tools.registry")
@@ -137,6 +144,168 @@ _CONTROL_PATTERNS: list[tuple[re.Pattern, str]] = [
     ),
 ]
 
+_LIST_WINDOWS_RE = re.compile(
+    r"\b(?:(?:what|which)\s+(?:are\s+)?(?:the\s+)?(?:windows|apps|applications)\s+(?:that\s+are\s+|are\s+)?(?:open|opened|do\s+i\s+have\s+open|running|on\s+my\s+(?:desktop|pc)|right\s+now|they|do\s+you\s+see)|"
+    r"list\s+open\s+(?:windows|apps|applications)|"
+    r"any\s+other\s+apps\s+open(?:ed)?|what(?:'s|\s+is)\s+open\s+on\s+my\s+(?:pc|computer|desktop)|"
+    r"(?:what|which)\s+app\s+do\s+you\s+see|(?:don't|do\s+you)\s+see\s+[a-z0-9\s]+\s+open(?:ed)?)\b",
+    re.IGNORECASE,
+)
+
+_LIST_TASKS_RE = re.compile(
+    r"\b(?:(?:what|which)\s+(?:are\s+)?(?:the\s+)?(?:tasks|processes|apps|applications)\s+(?:that\s+are\s+|are\s+)?(?:running|open|opening|in\s+the\s+background)|"
+    r"(?:tasks|processes|apps)\s+(?:running|open|opening)\s+in\s+the\s+background|"
+    r"other\s+running\s+tasks|few\s+other\s+running\s+tasks|"
+    r"check\s+(?:my\s+)?(?:tasks|running\s+tasks|processes|system\s+status|cpu|ram|memory|battery)|"
+    r"show\s+(?:my\s+)?tasks|view\s+(?:my\s+)?tasks|what(?:'s|\s+is)\s+using\s+(?:my\s+)?(?:cpu|ram|memory)|"
+    r"how\s+much\s+(?:ram|memory|cpu|battery)\s+(?:is\s+used|do\s+i\s+have|is\s+left)|"
+    r"system\s+(?:status|resources|usage)|battery\s+(?:level|percentage|status))\b",
+    re.IGNORECASE,
+)
+
+_OPEN_TASK_MANAGER_RE = re.compile(
+    r"\b(?:open|launch|start|show)\s+task\s+manager\b",
+    re.IGNORECASE,
+)
+
+_FOCUS_WINDOW_RE = re.compile(
+    r"^(?:hey\s+v[aā][nṇ][iī]\s*,?\s*)?(?:can\s+you\s+|please\s+)*(?:switch\s+to|focus(?:\s+on)?|bring\s+up)\s+(?:the\s+)?(?P<target>[a-zA-Z0-9\s._-]{2,35}?)(?:\s+window|\s+app)?[.!?]*$",
+    re.IGNORECASE,
+)
+
+# Tool 1: Local Document / PDF RAG patterns
+_DOC_RAG_LIST_RE = re.compile(
+    r"\b(?:list|what|which)\s+(?:are\s+)?(?:the\s+|my\s+)?(?:documents|docs|reports|pdfs)\s+(?:are\s+)?(?:in\s+(?:my\s+|the\s+)?docs|do\s+you\s+have|available)?[.!?]*$",
+    re.IGNORECASE,
+)
+_DOC_RAG_QUERY_RE = re.compile(
+    r"\b(?:according\s+to\s+(?:my|the)\s+(?:document|documents|doc|docs|report|project\s+report|notes|pdf)|"
+    r"(?:search|check|read|look\s+in)\s+(?:my|the)\s+(?:document|documents|doc|docs|report|project\s+report|notes|pdf)|"
+    r"what\s+does\s+(?:my|the)\s+(?:document|documents|report|project\s+report|notes|pdf)\s+say|"
+    r"summarize\s+(?:my|the)\s+(?:document|documents|report|project\s+report|notes|pdf)|"
+    r"in\s+(?:my|the)\s+(?:project\s+report|document|documents|notes|pdf))\b",
+    re.IGNORECASE,
+)
+
+# Tool 2: Autonomous File Finder & Organizer patterns
+_ORGANIZE_FOLDER_RE = re.compile(
+    r"^(?:hey\s+v[aā][nṇ][iī]\s*,?\s*)?(?:can\s+you\s+|could\s+you\s+|please\s+)*"
+    r"(?:organize|clean\s+up|sort)\s+(?:my\s+|the\s+)?(?P<target>downloads|documents|demo\s+folder)(?:\s+folder)?[.!?]*$",
+    re.IGNORECASE,
+)
+_FIND_FILE_RE = re.compile(
+    r"^(?:hey\s+v[aā][nṇ][iī]\s*,?\s*)?(?:can\s+you\s+|could\s+you\s+|please\s+)*"
+    r"(?:find(?:\s+and\s+open)?|locate|open\s+my\s+file|search\s+for\s+file)\s+(?P<query>.+?)[.!?]*$",
+    re.IGNORECASE,
+)
+
+# Tool 3: Hands-Free WhatsApp & Email patterns
+_WHATSAPP_RE = re.compile(
+    r"^(?:hey\s+v[aā][nṇ][iī]\s*,?\s*)?(?:can\s+you\s+|could\s+you\s+|please\s+)*"
+    r"(?:send\s+(?:a\s+)?whatsapp(?:\s+message)?|message\s+on\s+whatsapp|whatsapp)"
+    r"(?:\s+(?:to\s+)?(?P<recipient>[a-zA-Z0-9 +._-]{1,35}?))?"
+    r"\s+(?:saying|that|message|:)\s+(?P<message>.+?)[.!?]*$",
+    re.IGNORECASE,
+)
+_EMAIL_RE = re.compile(
+    r"^(?:hey\s+v[aā][nṇ][iī]\s*,?\s*)?(?:can\s+you\s+|could\s+you\s+|please\s+)*"
+    r"(?:draft|write|send|compose)\s+(?:an?\s+)?email"
+    r"(?:\s+to\s+(?P<recipient>[a-zA-Z0-9 @._+-]{1,45}?))?"
+    r"(?:\s+(?:about|regarding|with\s+subject)\s+(?P<subject>.+?))?"
+    r"(?:\s+(?:saying|that|body|:)\s+(?P<message>.+?))?[.!?]*$",
+    re.IGNORECASE,
+)
+
+# Tool 4: Voice-to-Code & Webpage Generator patterns
+_CODE_GEN_PY_RE = re.compile(
+    r"^(?:hey\s+v[aā][nṇ][iī]\s*,?\s*)?(?:can\s+you\s+|could\s+you\s+|please\s+)*"
+    r"(?:write|generate|create|make)\s+(?:a\s+)?python\s+(?:script|code|program)(?:\s+(?:for|to|of))?\s+(?P<topic>.+?)[.!?]*$",
+    re.IGNORECASE,
+)
+_CODE_GEN_HTML_RE = re.compile(
+    r"^(?:hey\s+v[aā][nṇ][iī]\s*,?\s*)?(?:can\s+you\s+|could\s+you\s+|please\s+)*"
+    r"(?:write|generate|create|make|build)\s+(?:an?\s+)?(?:html\s+page|web\s*page|website)(?:\s+(?:for|about|of))?\s+(?P<topic>.+?)[.!?]*$",
+    re.IGNORECASE,
+)
+
+# Tool 5: Persistent Personal Memory & Voice Timer patterns
+_REMEMBER_RE = re.compile(
+    r"^(?:hey\s+v[aā][nṇ][iī]\s*,?\s*)?(?:can\s+you\s+|please\s+)*"
+    r"(?:remember\s+(?:that\s+)?|save\s+to\s+memory(?:\s+that)?\s+|keep\s+in\s+mind\s+(?:that\s+)?)(?P<fact>.+?)[.!?]*$",
+    re.IGNORECASE,
+)
+_RECALL_RE = re.compile(
+    r"\b(?:what\s+do\s+you\s+remember(?:\s+about\s+me)?|what(?:'s|\s+is)\s+in\s+your\s+memory|tell\s+me\s+what\s+you\s+remember)\b",
+    re.IGNORECASE,
+)
+_CLEAR_MEMORY_RE = re.compile(
+    r"\b(?:clear\s+(?:your\s+|my\s+)?memory|forget\s+(?:everything|what)\s+(?:you\s+)?remember)\b",
+    re.IGNORECASE,
+)
+_SET_TIMER_RE = re.compile(
+    r"(?:set|start)\s+(?:a\s+)?timer\s+(?:for\s+)?(?P<dur>\d+|a|an|one|two|three|four|five|six|seven|eight|nine|ten|fifteen|twenty|thirty|forty|forty-five|fifty|sixty)\s*(?P<unit>seconds?|secs?|minutes?|mins?)",
+    re.IGNORECASE,
+)
+_CHECK_TIMER_RE = re.compile(
+    r"\b(?:check\s+(?:my\s+|the\s+)?timer|how\s+much\s+time\s+(?:is\s+left|remaining)\s+on\s+(?:my\s+|the\s+)?timer)\b",
+    re.IGNORECASE,
+)
+
+# Real-world Agentic PC Automation patterns
+_CREATE_NOTE_RE = re.compile(
+    r"^(?:hey\s+v[aā][nṇ][iī]\s*,?\s*)?(?:can\s+you\s+|could\s+you\s+|please\s+)*"
+    r"(?:create|take|write|make|save)\s+a\s+(?:quick\s+)?note(?:\s+(?:saying|that|reading|about|called|:))?\s+(?P<content>.+?)[.!?]*$",
+    re.IGNORECASE,
+)
+
+_YOUTUBE_SEARCH_RE = re.compile(
+    r"^(?:hey\s+v[aā][nṇ][iī]\s*,?\s*)?(?:can\s+you\s+|could\s+you\s+|please\s+)*"
+    r"(?:(?:search|look\s+up|find)\s+(?:youtube\s+for|on\s+youtube\s+(?:for\s+)?)(?P<q1>.+?)|"
+    r"(?:play|watch|open|search)\s+(?P<q2>.+?)\s+on\s+youtube)[.!?]*$",
+    re.IGNORECASE,
+)
+
+_WEB_SEARCH_RE = re.compile(
+    r"^(?:hey\s+v[aā][nṇ][iī]\s*,?\s*)?(?:can\s+you\s+|could\s+you\s+|please\s+)*"
+    r"(?:(?:search|look\s+up|google)\s+(?:google\s+for|the\s+web\s+for|online\s+for|for)?\s*(?P<q1>.+?)(?:\s+on\s+google)?|"
+    r"google\s+(?P<q2>.+?))[.!?]*$",
+    re.IGNORECASE,
+)
+
+_BRIGHTNESS_RE = re.compile(
+    r"(?:(?:set|adjust|change)\s+(?:the\s+)?(?:screen\s+)?brightness\s+(?:to\s+)?(?P<level>\d{1,3})\s*%?|"
+    r"(?P<dir>increase|raise|turn\s+up|decrease|lower|dim|turn\s+down)\s+(?:the\s+)?(?:screen\s+)?brightness)",
+    re.IGNORECASE,
+)
+
+_SCREENSHOT_RE = re.compile(
+    r"\b(?:take|capture|grab|save)\s+a\s+screenshot\b",
+    re.IGNORECASE,
+)
+
+_DATETIME_RE = re.compile(
+    r"\b(?:what(?:'s|\s+is)\s+(?:the\s+)?(?:current\s+)?time|what\s+time\s+is\s+it|"
+    r"what(?:'s|\s+is)\s+today(?:'s)?\s+date|what\s+date\s+is\s+it|what\s+day\s+is\s+(?:it|today))\b",
+    re.IGNORECASE,
+)
+
+_MINIMIZE_ALL_RE = re.compile(
+    r"\b(?:minimize\s+all(?:\s+windows)?|show\s+(?:my\s+|the\s+)?desktop|hide\s+all\s+windows)\b",
+    re.IGNORECASE,
+)
+
+_CLIPBOARD_RE = re.compile(
+    r"\b(?:read\s+(?:my\s+)?clipboard|what(?:'s|\s+is)\s+(?:on|in)\s+(?:my\s+)?clipboard|"
+    r"(?:explain|summarize|read)\s+what\s+i\s+(?:just\s+)?copied)\b",
+    re.IGNORECASE,
+)
+
+_OPEN_TARGET_RE = re.compile(
+    r"^(?:hey\s+v[aā][nṇ][iī]\s*,?\s*)?(?:can\s+you\s+|could\s+you\s+|please\s+)*"
+    r"(?:open|launch|start)\s+(?!spotify\s+and\s+play\b|task\s+manager\b)(?P<target>[a-zA-Z0-9\s._-]{2,40}?)[.!?]*$",
+    re.IGNORECASE,
+)
+
 # Matches LLM-emitted tags like: [TOOL: spotify_play(query="Starboy")] or [TOOL: spotify_control(action="pause")]
 _TOOL_TAG_RE = re.compile(
     r"\[TOOL:\s*(?P<func>[a-zA-Z0-9_]+)\((?P<args>[^\)]*)\)\s*\]",
@@ -164,6 +333,13 @@ class ToolRegistry:
     def __init__(self) -> None:
         self._tools: dict[str, BaseTool] = {}
         self.register(SpotifyTool())
+        self.register(ScreenTasksTool())
+        self.register(PCAgentTool())
+        self.register(DocRAGTool())
+        self.register(FileManagerTool())
+        self.register(CommsTool())
+        self.register(CodeGenTool())
+        self.register(MemoryTimerTool())
 
     def register(self, tool: BaseTool) -> None:
         self._tools[tool.name] = tool
@@ -177,11 +353,137 @@ class ToolRegistry:
             return ToolResult(False, f"Tool '{name}' is not registered.")
         return tool.execute(**kwargs)
 
-    def match_fast_intent(self, user_text: str, last_assistant_text: str = "") -> ToolResult | None:
+    def match_fast_intent(
+        self,
+        user_text: str,
+        last_assistant_text: str = "",
+    ) -> ToolResult | None:
         """Check if user utterance matches a deterministic high-speed PC tool command."""
         text = (user_text or "").strip()
         if not text:
             return None
+
+        # 0. Check Open Windows, Background Tasks / System Resource commands
+        if _OPEN_TASK_MANAGER_RE.search(text):
+            logger.info("Fast-path tool match: open_task_manager for %r", text)
+            return self.execute("screen_tasks", action="open_task_manager")
+
+        m_focus = _FOCUS_WINDOW_RE.match(text)
+        if m_focus:
+            target = m_focus.group("target").strip(" .,!?\"'")
+            if target and target.lower() not in ("next song", "another song", "music"):
+                logger.info("Fast-path tool match: focus_window target=%r", target)
+                return self.execute("screen_tasks", action="focus_window", target=target)
+
+        if _LIST_TASKS_RE.search(text):
+            logger.info("Fast-path tool match: list_tasks for %r", text)
+            return self.execute("screen_tasks", action="list_tasks")
+
+        if _LIST_WINDOWS_RE.search(text):
+            logger.info("Fast-path tool match: list_windows for %r", text)
+            return self.execute("screen_tasks", action="list_windows")
+
+        # 0a. Local Document / PDF RAG
+        if _DOC_RAG_LIST_RE.search(text):
+            return self.execute("doc_rag", action="list_docs")
+        if _DOC_RAG_QUERY_RE.search(text):
+            action = "summarize" if "summarize" in text.lower() else "query"
+            return self.execute("doc_rag", action=action, query=text)
+
+        # Tool 2: File Finder & Organizer
+        m_org = _ORGANIZE_FOLDER_RE.match(text)
+        if m_org:
+            return self.execute("file_manager", action="organize_folder", target=m_org.group("target"))
+        m_find = _FIND_FILE_RE.match(text)
+        if m_find:
+            q_file = m_find.group("query").strip()
+            if q_file:
+                return self.execute("file_manager", action="find_file", query=q_file)
+
+        # Tool 3: WhatsApp & Email Dispatcher
+        m_wa = _WHATSAPP_RE.match(text)
+        if m_wa:
+            rec = (m_wa.group("recipient") or "").strip()
+            if rec.lower().startswith("to "):
+                rec = rec[3:].strip()
+            return self.execute("comms", action="whatsapp", recipient=rec, message=m_wa.group("message"))
+
+        m_em = _EMAIL_RE.match(text)
+        if m_em and (m_em.group("subject") or m_em.group("message") or m_em.group("recipient")):
+            return self.execute(
+                "comms",
+                action="email",
+                recipient=(m_em.group("recipient") or "").strip(),
+                subject=(m_em.group("subject") or "").strip(),
+                message=(m_em.group("message") or "").strip(),
+            )
+
+        # Tool 4: Voice-to-Code & Webpage Generator
+        m_py = _CODE_GEN_PY_RE.match(text)
+        if m_py:
+            return self.execute("code_gen", language="python", topic=m_py.group("topic"))
+
+        m_html = _CODE_GEN_HTML_RE.match(text)
+        if m_html:
+            return self.execute("code_gen", language="html", topic=m_html.group("topic"))
+
+        # Tool 5: Persistent Personal Memory & Voice Timers
+        m_rem = _REMEMBER_RE.match(text)
+        if m_rem:
+            return self.execute("memory_timer", action="remember", fact=m_rem.group("fact"))
+
+        if _RECALL_RE.search(text):
+            return self.execute("memory_timer", action="recall")
+
+        if _CLEAR_MEMORY_RE.search(text):
+            return self.execute("memory_timer", action="clear_memory")
+
+        m_tm = _SET_TIMER_RE.search(text)
+        if m_tm:
+            return self.execute("memory_timer", action="set_timer", duration=m_tm.group("dur"), unit=m_tm.group("unit"))
+
+        if _CHECK_TIMER_RE.search(text):
+            return self.execute("memory_timer", action="check_timer")
+
+        # 0b. Check Presentation-Ready Real-World PC Agent tools
+        m_note = _CREATE_NOTE_RE.match(text)
+        if m_note:
+            return self.execute("pc_agent", action="create_note", target=m_note.group("content"))
+
+        m_yt = _YOUTUBE_SEARCH_RE.match(text)
+        if m_yt:
+            q = (m_yt.group("q1") or m_yt.group("q2") or "").strip()
+            return self.execute("pc_agent", action="youtube_search", target=q)
+
+        if any(k in text.lower() for k in ("search google", "search the web", "look up", "google ")):
+            m_web = _WEB_SEARCH_RE.match(text)
+            if m_web:
+                q = (m_web.group("q1") or m_web.group("q2") or "").strip()
+                return self.execute("pc_agent", action="web_search", target=q)
+
+        m_bright = _BRIGHTNESS_RE.search(text)
+        if m_bright:
+            lvl = m_bright.group("level")
+            d = m_bright.group("dir") or ""
+            return self.execute("pc_agent", action="brightness", target=d, level=int(lvl) if lvl else None)
+
+        if _SCREENSHOT_RE.search(text):
+            return self.execute("pc_agent", action="screenshot")
+
+        if _DATETIME_RE.search(text):
+            t_low = text.lower()
+            mode = "time" if "time" in t_low else ("date" if ("date" in t_low or "day" in t_low) else "both")
+            return self.execute("pc_agent", action="datetime", mode=mode)
+
+        if _MINIMIZE_ALL_RE.search(text):
+            return self.execute("pc_agent", action="minimize_all")
+
+        if _CLIPBOARD_RE.search(text):
+            return self.execute("pc_agent", action="read_clipboard", user_text=text)
+
+        m_open = _OPEN_TARGET_RE.match(text)
+        if m_open and "and play" not in text.lower():
+            return self.execute("pc_agent", action="open_target", target=m_open.group("target"))
 
         # 1. Check media control commands first ("pause the music", "next song", "play some other song", etc.)
         for pat, action in _CONTROL_PATTERNS:
@@ -258,6 +560,10 @@ class ToolRegistry:
                 results.append(self.execute("spotify", action=act))
             elif func == "spotify":
                 results.append(self.execute("spotify", **kwargs))
+            elif func in ("screen_tasks", "view_screen", "list_tasks", "list_windows", "focus_window"):
+                if func != "screen_tasks" and "action" not in kwargs:
+                    kwargs["action"] = func
+                results.append(self.execute("screen_tasks", **kwargs))
 
         # Fallback: If the 1.5B LLM said "Playing <query> on Spotify" without emitting a [TOOL: ...] tag
         if not results:

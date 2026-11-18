@@ -1,11 +1,23 @@
-"""Speech-to-text with faster-whisper (CTranslate2 backend)."""
+"""Speech-to-text with faster-whisper (CTranslate2 backend) with peak normalization and domain conditioning."""
 
 from __future__ import annotations
 
+import logging
 import numpy as np
 
 from .config import SttCfg
 from .cuda_setup import add_cuda_dll_dirs
+
+logger = logging.getLogger("v2v.stt")
+
+_DEFAULT_INITIAL_PROMPT = (
+    "Vāṇī voice assistant on Windows PC. "
+    "What is on my screen? Read my screen. What do you see on the screen? "
+    "Which applications are open? Which tasks are running in the background? "
+    "What windows do I have open? Play song on Spotify. Pause the music. Switch to window."
+)
+
+_DEFAULT_HOTWORDS = "Vāṇī, screen, applications, tasks, windows, background, desktop, Spotify, pause, resume"
 
 
 class WhisperSTT:
@@ -14,24 +26,42 @@ class WhisperSTT:
         from faster_whisper import WhisperModel
 
         self.cfg = cfg
-        self.model = WhisperModel(cfg.model, device=cfg.device, compute_type=cfg.compute_type)
+        try:
+            self.model = WhisperModel(cfg.model, device=cfg.device, compute_type=cfg.compute_type)
+        except Exception as e:
+            logger.warning("Could not load STT model %r (%s); falling back to 'small.en'", cfg.model, e)
+            self.model = WhisperModel("small.en", device=cfg.device, compute_type=cfg.compute_type)
 
     def warmup(self) -> None:
         self.transcribe(np.zeros(16000, dtype=np.float32))
 
     def transcribe(self, audio: np.ndarray) -> str:
+        if audio.size == 0:
+            return ""
+
+        # 1. Peak-normalize quiet microphone utterances to prevent int8 quantization WER
+        peak = float(np.max(np.abs(audio)))
+        if 0.008 < peak < 0.75:
+            gain = min(6.0, 0.85 / peak)
+            audio = np.clip(audio * gain, -1.0, 1.0).astype(np.float32)
+
+        # 2. Pad 120ms of trailing silence so final consonants ('screen', 'open', 'tasks') aren't truncated
+        audio = np.concatenate([audio, np.zeros(1920, dtype=np.float32)])
+
         segments, _info = self.model.transcribe(
             audio,
             language=self.cfg.language,
-            beam_size=self.cfg.beam_size,
+            beam_size=max(2, self.cfg.beam_size),
             vad_filter=False,                 # Silero already segmented the audio
             condition_on_previous_text=False,
             without_timestamps=True,
+            initial_prompt=_DEFAULT_INITIAL_PROMPT,
+            hotwords=_DEFAULT_HOTWORDS,
         )
         parts = []
         for s in segments:
             # skip Whisper's classic hallucinations on noise ("Thank you.", etc.)
-            if s.no_speech_prob > 0.6 and s.avg_logprob < -1.0:
+            if s.no_speech_prob > 0.65 and s.avg_logprob < -1.0:
                 continue
             parts.append(s.text.strip())
         return " ".join(parts).strip()

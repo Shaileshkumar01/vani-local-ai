@@ -14,6 +14,7 @@ from .llm import Conversation, LLMBackend, make_llm
 from .metrics import MetricsLog
 from .stt import WhisperSTT
 from .tools import ToolRegistry
+from .tools.memory_timer import load_memory_prompt_suffix
 from .tts import KokoroTTS
 from .vad import Endpointer, SileroVAD
 
@@ -65,4 +66,5 @@ class Engine:
 
     def create_conversation(self) -> Conversation:
         """Create a fresh conversation memory for a session."""
-        return Conversation(self.cfg.llm.system_prompt, self.cfg.llm.history_turns)
+        prompt = self.cfg.llm.system_prompt + load_memory_prompt_suffix()
+        return Conversation(prompt, self.cfg.llm.history_turns)

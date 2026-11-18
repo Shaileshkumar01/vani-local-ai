@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass
+import threading
 
 import numpy as np
 import torch
@@ -25,13 +26,15 @@ class SileroVAD:
         torch.set_num_threads(1)  # tiny model; extra threads only add overhead
         self.model = load_silero_vad()
         self.sr = sample_rate
+        self._lock = threading.Lock()
 
     def prob(self, frame: np.ndarray) -> float:
-        with torch.inference_mode():
+        with self._lock, torch.inference_mode():
             return float(self.model(torch.from_numpy(frame), self.sr).item())
 
     def reset(self) -> None:
-        self.model.reset_states()
+        with self._lock:
+            self.model.reset_states()
 
 
 class Endpointer:
@@ -77,7 +80,7 @@ class Endpointer:
             return False, None
 
         self.frames.append(frame)
-        hysteresis_thresh = active_thresh - 0.15
+        hysteresis_thresh = max(0.22, active_thresh - 0.22)
         if p >= hysteresis_thresh:  # hysteresis: easier to stay in speech than to enter it
             self.silent_run = 0
             self.last_voice_t = t
@@ -85,8 +88,8 @@ class Endpointer:
             self.silent_run += 1
 
         if self.silent_run >= self.min_silence or len(self.frames) >= self.max_frames:
-            # drop most of the trailing silence; Whisper doesn't need it
-            keep = len(self.frames) - max(0, self.silent_run - 3)
+            # Keep ~288ms (9 frames) of trailing audio so final consonants ('screen', 'open') are never clipped
+            keep = len(self.frames) - max(0, self.silent_run - 9)
             utt = Utterance(np.concatenate(self.frames[:keep]), self.last_voice_t, t)
             self.in_speech = False
             self.voiced_run = 0
