@@ -564,6 +564,62 @@ def intercept_and_save_llm_code(raw_reply: str, user_text: str = "") -> tuple[st
     return spoken, out_path
 
 
+def _extract_fenced_code(raw: str) -> str:
+    """Extract code from markdown fences if present, otherwise return stripped raw string."""
+    m = re.search(r"```[a-zA-Z0-9_-]*\s*\n([\s\S]+?)```", raw)
+    if m:
+        return m.group(1).strip()
+    m_open = re.search(r"```[a-zA-Z0-9_-]*\s*\n([\s\S]+)$", raw)
+    if m_open:
+        return m_open.group(1).strip()
+    return raw.strip()
+
+
+def _ensure_valid_python(code: str, fname: str) -> str | None:
+    """Validate that Python code compiles; if truncated at the tail, trim incomplete lines."""
+    lines = code.splitlines()
+    while lines:
+        candidate = "\n".join(lines).strip() + "\n"
+        try:
+            compile(candidate, fname, "exec")
+            return candidate
+        except SyntaxError:
+            lines.pop()
+    return None
+
+
+def _ensure_valid_html(html_code: str, title: str) -> str | None:
+    """Extract and close HTML document produced by the LLM."""
+    low = html_code.lower()
+    start = low.find("<!doctype html")
+    if start == -1:
+        start = low.find("<html")
+    if start == -1:
+        return None
+    doc = html_code[start:].strip()
+    if "</script>" not in doc.lower() and "<script" in doc.lower():
+        doc += "\n</script>"
+    if "</style>" not in doc.lower() and "<style" in doc.lower():
+        doc += "\n</style>"
+    if "</body>" not in doc.lower():
+        doc += "\n</body>"
+    if "</html>" not in doc.lower():
+        doc += "\n</html>"
+    return doc + "\n"
+
+
+def _topic_to_slug(topic: str, default: str = "app") -> str:
+    clean = re.sub(
+        r"\b(?:a|an|the|simple|new|custom|modern|basic|small|python|script|program|code|file|html|page|web|app|application|website|site|langgraph|langchain|agent|for|to|of|about|in|with|that)\b",
+        " ",
+        topic.lower(),
+    )
+    slug = re.sub(r"[^a-z0-9]+", "_", clean).strip("_")[:32]
+    if not slug:
+        slug = re.sub(r"[^a-z0-9]+", "_", topic.lower()).strip("_")[:32] or default
+    return slug
+
+
 class CodeGenTool(BaseTool):
     """Generates runnable Python scripts, HTML web apps, and LangGraph agents into Desktop/Vani_Workspace."""
 
@@ -577,6 +633,131 @@ class CodeGenTool(BaseTool):
         "topic": "Program, webpage, or agent topic requested by the user",
     }
 
+    def __init__(self) -> None:
+        self.llm: Any = None
+
+    def set_llm(self, llm: Any) -> None:
+        self.llm = llm
+
+    def _synthesize_python_with_llm(self, topic: str, fname: str) -> str | None:
+        if self.llm is None:
+            return None
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You are an expert Python developer. Write a complete, self-contained, runnable Python 3 script "
+                    "for the user's request. Rules:\n"
+                    "1. Output ONLY a single ```python code block and zero explanation outside it.\n"
+                    "2. Use only the Python standard library so it runs immediately without pip installs.\n"
+                    "3. Include clear functions/classes with docstrings and an `if __name__ == \"__main__\":` block "
+                    "that runs a working demonstration with sample inputs and prints clear output.\n"
+                    "4. Do NOT use `input()` in the `__main__` block; pass sample values directly so the script executes immediately."
+                ),
+            },
+            {
+                "role": "user",
+                "content": f"Write a complete, runnable Python script for: {topic}",
+            },
+        ]
+        try:
+            raw = self.llm.complete(messages, max_tokens=650, temperature=0.2)
+            extracted = _extract_fenced_code(raw)
+            valid = _ensure_valid_python(extracted, fname)
+            if valid and len(valid.splitlines()) >= 6:
+                return valid
+        except Exception as e:
+            logger.warning("LLM Python synthesis failed for %r: %s", topic, e)
+        return None
+
+    def _synthesize_html_with_llm(self, topic: str, fname: str) -> str | None:
+        if self.llm is None:
+            return None
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You are an expert frontend engineer. Build a complete, single-file HTML5 web application "
+                    "for the user's request. Rules:\n"
+                    "1. Output ONLY a single ```html code block starting with <!DOCTYPE html> and ending with </html>.\n"
+                    "2. Include modern dark-mode CSS (#090b12 background, #121726 cards, #00f2fe cyan accents, clean layout).\n"
+                    "3. Include working interactive JavaScript (<script>) so all buttons, inputs, and features actually work in the browser."
+                ),
+            },
+            {
+                "role": "user",
+                "content": f"Build a complete interactive HTML/CSS/JS web app for: {topic}",
+            },
+        ]
+        try:
+            raw = self.llm.complete(messages, max_tokens=900, temperature=0.25)
+            extracted = _extract_fenced_code(raw)
+            valid = _ensure_valid_html(extracted, topic)
+            if valid and len(valid) >= 250:
+                return valid
+        except Exception as e:
+            logger.warning("LLM HTML synthesis failed for %r: %s", topic, e)
+        return None
+
+    def _synthesize_langgraph_with_llm(self, topic: str) -> tuple[str, str]:
+        """Generate a runnable LangGraph StateGraph agent tailored to `topic`, using the LLM to craft custom domain tools & steps."""
+        fname, base_code = _render_langgraph_agent(topic)
+        if self.llm is None:
+            return fname, base_code
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You are an expert Python & LangChain engineer. Write 3 domain-specific Python tool functions "
+                    "decorated with `@tool` for the user's agent topic. Rules:\n"
+                    "1. Output ONLY a ```python code block containing 3 functions decorated with `@tool`.\n"
+                    "2. Each function must take `(query: str) -> str`, have a clear docstring specific to the domain, "
+                    "perform domain logic using the Python standard library, and return a descriptive string result.\n"
+                    "3. Do NOT import anything outside the Python standard library."
+                ),
+            },
+            {
+                "role": "user",
+                "content": f"Write 3 domain-specific `@tool` functions in Python for an autonomous agent handling: {topic}",
+            },
+        ]
+        try:
+            raw = self.llm.complete(messages, max_tokens=450, temperature=0.25)
+            extracted = _extract_fenced_code(raw)
+            # Strip any external langchain imports from the snippet since base_code already provides @tool safely
+            cleaned_lines = [
+                ln for ln in extracted.splitlines()
+                if not ln.strip().startswith(("from langchain", "import langchain", "from langgraph", "import langgraph"))
+            ]
+            snippet = "\n".join(cleaned_lines).strip()
+            fn_names = re.findall(r"def\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\(", snippet)
+            if len(fn_names) >= 2 and _ensure_valid_python("def tool(f): return f\n" + snippet, fname):
+                # Inject the LLM-generated domain tools into the verified StateGraph agent
+                marker_start = "# 2. Define Domain Tools"
+                marker_end = "# 3. Define LangGraph Nodes"
+                if marker_start in base_code and marker_end in base_code:
+                    head, _, rest = base_code.partition(marker_start)
+                    _, _, tail = rest.partition(marker_end)
+                    t0 = fn_names[0]
+                    t1 = fn_names[1]
+                    t2 = fn_names[2] if len(fn_names) >= 3 else fn_names[1]
+                    tools_list = ", ".join(fn_names[:3])
+                    custom_section = (
+                        f"# 2. LLM-Synthesized Domain Tools for {topic.title()}\n"
+                        f"{snippet}\n\n"
+                        f"TOOLS = [{tools_list}]\n\n\n"
+                    )
+                    tail = tail.replace("search_domain_knowledge(state[\"task\"])", f"{t0}(state[\"task\"])")
+                    tail = re.sub(r"execute_automation_action\([^\)]+\)", f"{t1}(state[\"task\"])", tail)
+                    tail = re.sub(r"generate_report_artifact\([^\)]+\)", f"{t2}(state[\"task\"])", tail)
+                    combined = head + custom_section + marker_end + tail
+                    valid_combined = _ensure_valid_python(combined, fname)
+                    if valid_combined:
+                        return fname, valid_combined
+        except Exception as e:
+            logger.warning("LLM LangGraph tool synthesis fell back to dynamic graph builder for %r: %s", topic, e)
+        return fname, base_code
+
     def execute(self, **kwargs: Any) -> ToolResult:
         lang = str(kwargs.get("language", "python")).lower().strip()
         topic = str(kwargs.get("topic", "demo")).strip(" .,!?\"'")
@@ -586,7 +767,7 @@ class CodeGenTool(BaseTool):
         t_low = topic.lower()
 
         if lang == "langgraph" or any(k in t_low for k in ("langgraph", "lang graph", "langchain", "lang chain", "agent")):
-            fname, code = _render_langgraph_agent(topic)
+            fname, code = self._synthesize_langgraph_with_llm(topic)
             out_path = ws / fname
             out_path.write_text(code, encoding="utf-8")
             if not dry_run:
@@ -597,8 +778,14 @@ class CodeGenTool(BaseTool):
             )
             return ToolResult(True, spoken, spoken_response=spoken, data={"path": str(out_path), "language": "langgraph"})
 
-        if lang == "html" or any(k in t_low for k in ("html", "website", "webpage", "web page", "portfolio", "landing page")):
-            fname, html_code = _render_html_template(topic)
+        if lang == "html" or any(k in t_low for k in ("html", "website", "webpage", "web page", "web app", "portfolio", "landing page")):
+            slug = _topic_to_slug(topic, default="webapp")
+            fname = f"{slug}.html"
+            # 1. Try live LLM synthesis first for genuine custom web app generation
+            html_code = self._synthesize_html_with_llm(topic, fname)
+            # 2. If LLM is not loaded (e.g. unit test) or output was incomplete, use rich template builder
+            if not html_code:
+                fname, html_code = _render_html_template(topic)
             out_path = ws / fname
             out_path.write_text(html_code, encoding="utf-8")
             if not dry_run:
@@ -606,18 +793,21 @@ class CodeGenTool(BaseTool):
             spoken = f"Created {fname} in your Vani Workspace folder and opened it in your browser and editor."
             return ToolResult(True, spoken, spoken_response=spoken, data={"path": str(out_path), "language": "html"})
 
-        # Python script generation
-        fname = ""
-        code = ""
-        for keywords, tmpl_fname, tmpl_code in _PYTHON_TEMPLATES:
-            if any(k in t_low for k in keywords):
-                fname = tmpl_fname
-                code = tmpl_code
-                break
+        # Python script generation:
+        # 1. Always try live LLM synthesis first so Vāṇī writes genuine Python code for ANY prompt
+        slug = _topic_to_slug(topic, default="script")
+        fname = f"{slug}.py"
+        code = self._synthesize_python_with_llm(topic, fname)
+
+        # 2. Fallback to reference implementations if LLM is not loaded (e.g., offline unit test)
+        if not code:
+            for keywords, tmpl_fname, tmpl_code in _PYTHON_TEMPLATES:
+                if any(k in t_low for k in keywords):
+                    fname = tmpl_fname
+                    code = tmpl_code
+                    break
 
         if not code:
-            slug = re.sub(r"[^a-z0-9]+", "_", t_low).strip("_")[:28] or "script"
-            fname = f"vani_{slug}.py"
             code = f'''"""Auto-generated Python module for: {topic}
 Created by Vāṇī AI in Desktop/Vani_Workspace.
 """

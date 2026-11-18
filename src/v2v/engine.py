@@ -41,6 +41,7 @@ class Engine:
         # 3. LLM Backend (Ollama by default)
         print(f"  -> Connecting LLM backend '{cfg.llm.backend}' (model: {cfg.llm.model})...", flush=True)
         self.llm = make_llm(cfg.llm)
+        self.tools.set_llm(self.llm)
 
         # 4. Kokoro TTS (GPU)
         print(f"  -> Loading Kokoro TTS on {cfg.tts.device}...", flush=True)

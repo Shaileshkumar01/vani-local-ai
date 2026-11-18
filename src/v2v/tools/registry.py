@@ -206,12 +206,14 @@ _CODE_GEN_AGENT_RE = re.compile(
     re.IGNORECASE,
 )
 _CODE_GEN_PY_RE = re.compile(
-    r"\b(?:write|generate|create|make|build)\s+(?:a\s+|an\s+|the\s+)?(?:simple\s+|new\s+)?python\s+(?:script|code|program|file)(?:\s+(?:for|to|of|about))?\s+(?P<topic>[a-zA-Z0-9\s._-]{2,60}?)[.!?]*$",
+    r"\b(?:write|generate|create|make|build|develop|code)\s+(?:me\s+)?(?:a\s+|an\s+|the\s+)?(?:simple\s+|new\s+|custom\s+|small\s+)?"
+    r"(?:python\s+(?:script|code|program|file|app|application|function|module)|(?:script|program|code|file)\s+in\s+python)"
+    r"(?:\s+(?:for|to|of|about|that|which))?\s+(?P<topic>[a-zA-Z0-9\s._'-]{2,70}?)[.!?]*$",
     re.IGNORECASE,
 )
 _CODE_GEN_HTML_RE = re.compile(
-    r"\b(?:(?:write|generate|create|make|build|develop|code)\s+(?:me\s+)?(?:a\s+|an\s+|the\s+)?(?:simple\s+|new\s+|modern\s+|small\s+|basic\s+)?(?:html\s+(?:page|file|code|site|app)|web\s*page|web\s*app(?:lication)?|website|portfolio(?:\s+site|\s+page)?|landing\s+page)(?:\s+(?:for|about|of|to|with))?\s*(?P<topic>[a-zA-Z0-9\s._-]{0,60}?)|"
-    r"^(?:an?\s+)?(?:simple\s+)?(?:html\s+(?:file|page)|web\s*page|web\s*app|website)\s+(?:for|about|of)\s+(?P<topic2>[a-zA-Z0-9\s._-]{2,50}?))[.!?]*$",
+    r"\b(?:(?:write|generate|create|make|build|develop|code)\s+(?:me\s+)?(?:a\s+|an\s+|the\s+)?(?:simple\s+|new\s+|modern\s+|small\s+|basic\s+)?(?:html\s+(?:page|file|code|site|app)|web\s*page|web\s*app(?:lication)?|website|portfolio(?:\s+site|\s+page)?|landing\s+page|(?:app|page|site)\s+in\s+html)(?:\s+(?:for|about|of|to|with|that))?\s*(?P<topic>[a-zA-Z0-9\s._'-]{0,70}?)|"
+    r"^(?:an?\s+)?(?:simple\s+)?(?:html\s+(?:file|page)|web\s*page|web\s*app|website)\s+(?:for|about|of)\s+(?P<topic2>[a-zA-Z0-9\s._'-]{2,60}?))[.!?]*$",
     re.IGNORECASE,
 )
 
@@ -370,6 +372,11 @@ class ToolRegistry:
 
     def get(self, name: str) -> BaseTool | None:
         return self._tools.get(name)
+
+    def set_llm(self, llm: Any) -> None:
+        for tool in self._tools.values():
+            if hasattr(tool, "set_llm"):
+                tool.set_llm(llm)
 
     def set_last_file(self, path: str | None) -> None:
         if path:

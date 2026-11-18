@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import deque
+import threading
 from typing import Iterator, Protocol
 
 from .config import LlmCfg
@@ -10,8 +11,8 @@ from .config import LlmCfg
 
 class LLMBackend(Protocol):
     def warmup(self) -> None: ...
-    def stream(self, messages: list[dict]) -> Iterator[str]: ...
-    def complete(self, messages: list[dict]) -> str: ...
+    def stream(self, messages: list[dict], max_tokens: int | None = None, temperature: float | None = None) -> Iterator[str]: ...
+    def complete(self, messages: list[dict], max_tokens: int | None = None, temperature: float | None = None) -> str: ...
 
 
 class OllamaLLM:
@@ -42,21 +43,31 @@ class OllamaLLM:
                 f"  -> make sure Ollama is running and run:  ollama pull {self.cfg.model}"
             ) from e
 
-    def stream(self, messages: list[dict]) -> Iterator[str]:
+    def stream(self, messages: list[dict], max_tokens: int | None = None, temperature: float | None = None) -> Iterator[str]:
+        opts = dict(self.options)
+        if max_tokens is not None:
+            opts["num_predict"] = max_tokens
+        if temperature is not None:
+            opts["temperature"] = temperature
         for part in self.client.chat(
             model=self.cfg.model,
             messages=messages,
             stream=True,
-            options=self.options,
+            options=opts,
             keep_alive=self.cfg.keep_alive,
         ):
             tok = part["message"]["content"]
             if tok:
                 yield tok
 
-    def complete(self, messages: list[dict]) -> str:
+    def complete(self, messages: list[dict], max_tokens: int | None = None, temperature: float | None = None) -> str:
+        opts = dict(self.options)
+        if max_tokens is not None:
+            opts["num_predict"] = max_tokens
+        if temperature is not None:
+            opts["temperature"] = temperature
         r = self.client.chat(
-            model=self.cfg.model, messages=messages, options=self.options, keep_alive=self.cfg.keep_alive
+            model=self.cfg.model, messages=messages, options=opts, keep_alive=self.cfg.keep_alive
         )
         return r["message"]["content"]
 
@@ -71,6 +82,7 @@ class LlamaCppLLM:
         from llama_cpp import Llama
 
         self.cfg = cfg
+        self._lock = threading.Lock()
         self.llm = Llama(
             model_path=cfg.llamacpp_model_path,
             n_gpu_layers=cfg.llamacpp_n_gpu_layers,
@@ -79,20 +91,26 @@ class LlamaCppLLM:
         )
 
     def warmup(self) -> None:
-        self.complete([{"role": "user", "content": "hi"}])
+        self.complete([{"role": "user", "content": "hi"}], max_tokens=1)
 
-    def stream(self, messages: list[dict]) -> Iterator[str]:
-        for chunk in self.llm.create_chat_completion(
-            messages=messages, stream=True, max_tokens=self.cfg.max_tokens, temperature=self.cfg.temperature
-        ):
-            tok = chunk["choices"][0]["delta"].get("content")
-            if tok:
-                yield tok
+    def stream(self, messages: list[dict], max_tokens: int | None = None, temperature: float | None = None) -> Iterator[str]:
+        mt = max_tokens if max_tokens is not None else self.cfg.max_tokens
+        temp = temperature if temperature is not None else self.cfg.temperature
+        with self._lock:
+            for chunk in self.llm.create_chat_completion(
+                messages=messages, stream=True, max_tokens=mt, temperature=temp
+            ):
+                tok = chunk["choices"][0]["delta"].get("content")
+                if tok:
+                    yield tok
 
-    def complete(self, messages: list[dict]) -> str:
-        r = self.llm.create_chat_completion(
-            messages=messages, max_tokens=self.cfg.max_tokens, temperature=self.cfg.temperature
-        )
+    def complete(self, messages: list[dict], max_tokens: int | None = None, temperature: float | None = None) -> str:
+        mt = max_tokens if max_tokens is not None else self.cfg.max_tokens
+        temp = temperature if temperature is not None else self.cfg.temperature
+        with self._lock:
+            r = self.llm.create_chat_completion(
+                messages=messages, max_tokens=mt, temperature=temp
+            )
         return r["choices"][0]["message"]["content"]
 
 
