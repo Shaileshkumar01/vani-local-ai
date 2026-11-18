@@ -10,14 +10,14 @@ audio:
 vad:
   threshold: 0.5          # speech probability to count a frame as voiced
   min_speech_ms: 96       # voiced audio needed before we treat it as a real utterance
-  min_silence_ms: 350     # natural conversational pause (avoids cutting user off mid-thought)
-  extended_silence_ms: 650 # extended silence window for trailing connectors (and, or, because...)
+  min_silence_ms: 600     # natural conversational pause (prevents chopping sentences in half)
+  extended_silence_ms: 950 # extended silence window for trailing connectors (and, or, because, to...)
   filler_silence_ms: 900  # silence required to discard hesitation sounds (mm, uh)
   pre_roll_ms: 300        # audio kept from before speech onset (avoids clipped first word)
   max_utterance_s: 20
 
 stt:
-  model: distil-large-v3  # distil-large-v3 (low WER, high accuracy) | small.en (fallback)
+  model: small.en         # small.en (~140ms on RTX 4050 without VRAM thrashing)
   device: cuda
   compute_type: int8_float16
   language: en

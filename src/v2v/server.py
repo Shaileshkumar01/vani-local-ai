@@ -148,6 +148,13 @@ async def websocket_endpoint(ws: WebSocket):
                     elif cmd == "clear_history":
                         session.conv = _engine.create_conversation()
                         await ws.send_json({"type": "history_cleared"})
+                    elif cmd == "set_browser_stt":
+                        session.use_browser_stt = bool(data.get("enabled", False))
+                    elif cmd == "user_text_turn":
+                        txt = str(data.get("text", "")).strip()
+                        stt_ms = float(data.get("stt_ms", 45.0))
+                        if txt:
+                            session.submit_text_turn(txt, stt_ms=stt_ms)
                 except Exception as e:
                     logger.warning("Error processing text command: %s", e)
 

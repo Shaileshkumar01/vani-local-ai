@@ -173,7 +173,7 @@ _FOCUS_WINDOW_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Tool 1: Local Document / PDF RAG patterns
+# Tool 1: Local Document / PDF & LangGraph/LangChain Knowledge RAG patterns
 _DOC_RAG_LIST_RE = re.compile(
     r"\b(?:list|what|which)\s+(?:are\s+)?(?:the\s+|my\s+)?(?:documents|docs|reports|pdfs)\s+(?:are\s+)?(?:in\s+(?:my\s+|the\s+)?docs|do\s+you\s+have|available)?[.!?]*$",
     re.IGNORECASE,
@@ -183,48 +183,35 @@ _DOC_RAG_QUERY_RE = re.compile(
     r"(?:search|check|read|look\s+in)\s+(?:my|the)\s+(?:document|documents|doc|docs|report|project\s+report|notes|pdf)|"
     r"what\s+does\s+(?:my|the)\s+(?:document|documents|report|project\s+report|notes|pdf)\s+say|"
     r"summarize\s+(?:my|the)\s+(?:document|documents|report|project\s+report|notes|pdf)|"
-    r"in\s+(?:my|the)\s+(?:project\s+report|document|documents|notes|pdf))\b",
+    r"in\s+(?:my|the)\s+(?:project\s+report|document|documents|notes|pdf)|"
+    r"(?:what\s+is|explain|tell\s+me\s+about|how\s+does)\s+(?:lang\s*graph|lang\s*chain|state\s*graph|lcel|react\s+agent))\b",
     re.IGNORECASE,
 )
 
 # Tool 2: Autonomous File Finder & Organizer patterns
 _ORGANIZE_FOLDER_RE = re.compile(
-    r"^(?:hey\s+v[aā][nṇ][iī]\s*,?\s*)?(?:can\s+you\s+|could\s+you\s+|please\s+)*"
-    r"(?:organize|clean\s+up|sort)\s+(?:my\s+|the\s+)?(?P<target>downloads|documents|demo\s+folder)(?:\s+folder)?[.!?]*$",
+    r"\b(?:organize|clean\s+up|sort)\s+(?:my\s+|the\s+)?(?P<target>downloads|documents|demo\s+folder)(?:\s+folder)?\b",
     re.IGNORECASE,
 )
 _FIND_FILE_RE = re.compile(
-    r"^(?:hey\s+v[aā][nṇ][iī]\s*,?\s*)?(?:can\s+you\s+|could\s+you\s+|please\s+)*"
-    r"(?:find(?:\s+and\s+open)?|locate|open\s+my\s+file|search\s+for\s+file)\s+(?P<query>.+?)[.!?]*$",
+    r"\b(?:find(?:\s+and\s+open)?|locate|open\s+my\s+file|search\s+for\s+(?:my\s+)?file)\s+(?P<query>[a-zA-Z0-9\s._-]{2,50}?)[.!?]*$",
     re.IGNORECASE,
 )
 
-# Tool 3: Hands-Free WhatsApp & Email patterns
-_WHATSAPP_RE = re.compile(
-    r"^(?:hey\s+v[aā][nṇ][iī]\s*,?\s*)?(?:can\s+you\s+|could\s+you\s+|please\s+)*"
-    r"(?:send\s+(?:a\s+)?whatsapp(?:\s+message)?|message\s+on\s+whatsapp|whatsapp)"
-    r"(?:\s+(?:to\s+)?(?P<recipient>[a-zA-Z0-9 +._-]{1,35}?))?"
-    r"\s+(?:saying|that|message|:)\s+(?P<message>.+?)[.!?]*$",
+# Tool 3: Antigravity/Codex-Style Code, Web App & LangGraph Agent Builder patterns
+_CODE_GEN_AGENT_RE = re.compile(
+    r"\b(?:write|generate|create|make|build|develop)\s+(?:a\s+|an\s+|the\s+)?(?:simple\s+|new\s+|custom\s+)?"
+    r"(?:(?:lang\s*graph|lang\s*chain|multi-agent|autonomous|ai)\s+(?:agent|workflow|pipeline|bot)|agent\s+(?:in\s+lang\s*graph|using\s+lang\s*graph|for))"
+    r"(?:\s+(?:for|to|that|about))?\s*(?P<topic>[a-zA-Z0-9\s._-]{2,60}?)[.!?]*$",
     re.IGNORECASE,
 )
-_EMAIL_RE = re.compile(
-    r"^(?:hey\s+v[aā][nṇ][iī]\s*,?\s*)?(?:can\s+you\s+|could\s+you\s+|please\s+)*"
-    r"(?:draft|write|send|compose)\s+(?:an?\s+)?email"
-    r"(?:\s+to\s+(?P<recipient>[a-zA-Z0-9 @._+-]{1,45}?))?"
-    r"(?:\s+(?:about|regarding|with\s+subject)\s+(?P<subject>.+?))?"
-    r"(?:\s+(?:saying|that|body|:)\s+(?P<message>.+?))?[.!?]*$",
-    re.IGNORECASE,
-)
-
-# Tool 4: Voice-to-Code & Webpage Generator patterns
 _CODE_GEN_PY_RE = re.compile(
-    r"^(?:hey\s+v[aā][nṇ][iī]\s*,?\s*)?(?:can\s+you\s+|could\s+you\s+|please\s+)*"
-    r"(?:write|generate|create|make)\s+(?:a\s+)?python\s+(?:script|code|program)(?:\s+(?:for|to|of))?\s+(?P<topic>.+?)[.!?]*$",
+    r"\b(?:write|generate|create|make|build)\s+(?:a\s+|an\s+|the\s+)?(?:simple\s+|new\s+)?python\s+(?:script|code|program|file)(?:\s+(?:for|to|of|about))?\s+(?P<topic>[a-zA-Z0-9\s._-]{2,60}?)[.!?]*$",
     re.IGNORECASE,
 )
 _CODE_GEN_HTML_RE = re.compile(
-    r"^(?:hey\s+v[aā][nṇ][iī]\s*,?\s*)?(?:can\s+you\s+|could\s+you\s+|please\s+)*"
-    r"(?:write|generate|create|make|build)\s+(?:an?\s+)?(?:html\s+page|web\s*page|website)(?:\s+(?:for|about|of))?\s+(?P<topic>.+?)[.!?]*$",
+    r"\b(?:(?:write|generate|create|make|build)\s+(?:a\s+|an\s+|the\s+)?(?:simple\s+|new\s+|modern\s+)?(?:html\s+(?:page|file|code|site)|web\s*page|website|portfolio(?:\s+site|\s+page)?|landing\s+page)(?:\s+(?:for|about|of|to))?\s*(?P<topic>[a-zA-Z0-9\s._-]{0,60}?)|"
+    r"^(?:an?\s+)?(?:simple\s+)?(?:html\s+(?:file|page)|web\s*page|website)\s+(?:for|about|of)\s+(?P<topic2>[a-zA-Z0-9\s._-]{2,50}?))[.!?]*$",
     re.IGNORECASE,
 )
 
@@ -391,41 +378,31 @@ class ToolRegistry:
             return self.execute("doc_rag", action=action, query=text)
 
         # Tool 2: File Finder & Organizer
-        m_org = _ORGANIZE_FOLDER_RE.match(text)
+        m_org = _ORGANIZE_FOLDER_RE.search(text)
         if m_org:
             return self.execute("file_manager", action="organize_folder", target=m_org.group("target"))
-        m_find = _FIND_FILE_RE.match(text)
-        if m_find:
-            q_file = m_find.group("query").strip()
-            if q_file:
-                return self.execute("file_manager", action="find_file", query=q_file)
 
-        # Tool 3: WhatsApp & Email Dispatcher
-        m_wa = _WHATSAPP_RE.match(text)
-        if m_wa:
-            rec = (m_wa.group("recipient") or "").strip()
-            if rec.lower().startswith("to "):
-                rec = rec[3:].strip()
-            return self.execute("comms", action="whatsapp", recipient=rec, message=m_wa.group("message"))
+        # Tool 3: Antigravity/Codex-Style Code, Web App & LangGraph Agent Builder
+        m_ag = _CODE_GEN_AGENT_RE.search(text)
+        if m_ag:
+            return self.execute("code_gen", language="langgraph", topic=m_ag.group("topic"))
 
-        m_em = _EMAIL_RE.match(text)
-        if m_em and (m_em.group("subject") or m_em.group("message") or m_em.group("recipient")):
-            return self.execute(
-                "comms",
-                action="email",
-                recipient=(m_em.group("recipient") or "").strip(),
-                subject=(m_em.group("subject") or "").strip(),
-                message=(m_em.group("message") or "").strip(),
-            )
-
-        # Tool 4: Voice-to-Code & Webpage Generator
-        m_py = _CODE_GEN_PY_RE.match(text)
+        m_py = _CODE_GEN_PY_RE.search(text)
         if m_py:
             return self.execute("code_gen", language="python", topic=m_py.group("topic"))
 
-        m_html = _CODE_GEN_HTML_RE.match(text)
+        m_html = _CODE_GEN_HTML_RE.search(text)
         if m_html:
-            return self.execute("code_gen", language="html", topic=m_html.group("topic"))
+            topic_html = (m_html.group("topic") or m_html.group("topic2") or "portfolio site").strip()
+            if not topic_html and "portfolio" in text.lower():
+                topic_html = "portfolio site"
+            return self.execute("code_gen", language="html", topic=topic_html or "web app")
+
+        m_find = _FIND_FILE_RE.search(text)
+        if m_find:
+            q_file = m_find.group("query").strip()
+            if q_file and "youtube" not in q_file.lower() and "google" not in q_file.lower():
+                return self.execute("file_manager", action="find_file", query=q_file)
 
         # Tool 5: Persistent Personal Memory & Voice Timers
         m_rem = _REMEMBER_RE.match(text)
@@ -537,6 +514,18 @@ class ToolRegistry:
             ):
                 logger.info("Context-aware fast-path match: spotify play query=%r", candidate)
                 return self.execute("spotify", action="play", query=candidate)
+
+        if any(
+            phrase in last_lower
+            for phrase in ("what would you like to create", "what would you like me to create", "what would you like to build")
+        ):
+            t_low = text.lower()
+            if any(k in t_low for k in ("langgraph", "lang graph", "langchain", "lang chain", "agent")):
+                return self.execute("code_gen", language="langgraph", topic=text)
+            if any(k in t_low for k in ("html", "website", "webpage", "web page", "portfolio")):
+                return self.execute("code_gen", language="html", topic=text)
+            if any(k in t_low for k in ("python", "script", "code", "program")):
+                return self.execute("code_gen", language="python", topic=text)
 
         return None
 

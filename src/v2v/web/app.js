@@ -16,7 +16,11 @@ class VoiceClient {
     this.activeSourceNodes = [];
     this.bargeInEnabled = true;
     this.noiseCancelEnabled = true;
-
+    this.SpeechRecognitionClass = window.SpeechRecognition || window.webkitSpeechRecognition || null;
+    this.browserSttEnabled = Boolean(this.SpeechRecognitionClass);
+    this.recognition = null;
+    this.speechStartTs = 0;
+    this.pendingTextCommand = null;
 
     this.state = 'disconnected'; // disconnected, ready, listening, thinking, speaking
     this.currentAgentBubble = null;
@@ -24,6 +28,7 @@ class VoiceClient {
     this.initDOMElements();
     this.initCanvasVisualizer();
     this.initEventListeners();
+    this.updateSttModeUI();
     this.pollSystemStatus();
   }
 
@@ -42,6 +47,11 @@ class VoiceClient {
     this.bargeInText = document.getElementById('barge-in-text');
     this.noiseCancelToggle = document.getElementById('noise-cancel-toggle');
     this.noiseCancelText = document.getElementById('noise-cancel-text');
+    this.sttModeToggle = document.getElementById('stt-mode-toggle');
+    this.sttModeText = document.getElementById('stt-mode-text');
+    this.sttModelLabel = document.getElementById('val-stt-model');
+    this.quickCmdForm = document.getElementById('quick-cmd-form');
+    this.quickCmdInput = document.getElementById('quick-cmd-input');
     this.miniModeBtn = document.getElementById('mini-mode-btn');
     this.miniPreviewEl = document.getElementById('mini-transcript-preview');
   }
@@ -110,6 +120,173 @@ class VoiceClient {
           this.ws.send(JSON.stringify({ type: 'set_noise_cancel', enabled: this.noiseCancelEnabled }));
         }
       });
+    }
+
+    if (this.sttModeToggle) {
+      this.sttModeToggle.addEventListener('click', () => {
+        if (!this.SpeechRecognitionClass) {
+          this.browserSttEnabled = false;
+          this.updateSttModeUI();
+          return;
+        }
+        this.browserSttEnabled = !this.browserSttEnabled;
+        this.updateSttModeUI();
+        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+          this.ws.send(JSON.stringify({ type: 'set_browser_stt', enabled: this.browserSttEnabled }));
+          if (this.browserSttEnabled) {
+            this.startBrowserRecognition();
+          } else {
+            this.stopBrowserRecognition();
+          }
+        }
+      });
+    }
+
+    if (this.quickCmdForm && this.quickCmdInput) {
+      this.quickCmdForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const text = (this.quickCmdInput.value || '').trim();
+        if (!text) return;
+        this.quickCmdInput.value = '';
+        await this.submitTextCommand(text);
+      });
+    }
+  }
+
+  async submitTextCommand(text) {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      if (this.activeSourceNodes.length > 0) {
+        this.stopAllAudio(false);
+        this.ws.send(JSON.stringify({ type: 'interrupt' }));
+      }
+      this.ws.send(JSON.stringify({ type: 'user_text_turn', text, stt_ms: 15 }));
+    } else {
+      this.pendingTextCommand = text;
+      await this.start();
+    }
+  }
+
+  updateSttModeUI() {
+    if (!this.sttModeToggle || !this.sttModeText) return;
+    if (this.browserSttEnabled && this.SpeechRecognitionClass) {
+      this.sttModeToggle.classList.remove('safe-mode');
+      this.sttModeText.textContent = 'STT: Neural Web';
+      this.sttModeToggle.title = 'Using Browser Neural Speech Recognition (Fast & Accurate). Click to switch to Local Whisper GPU.';
+      if (this.sttModelLabel) this.sttModelLabel.textContent = 'Neural Web + Small.en';
+    } else {
+      this.sttModeToggle.classList.add('safe-mode');
+      this.sttModeText.textContent = 'STT: Whisper GPU';
+      this.sttModeToggle.title = 'Using Local Faster-Whisper Small.en on CUDA GPU. Click to switch to Browser Neural STT.';
+      if (this.sttModelLabel) this.sttModelLabel.textContent = 'Whisper Small.en';
+    }
+  }
+
+  startBrowserRecognition() {
+    this.stopBrowserRecognition();
+    if (!this.browserSttEnabled || !this.SpeechRecognitionClass) return;
+
+    try {
+      const rec = new this.SpeechRecognitionClass();
+      rec.continuous = true;
+      rec.interimResults = true;
+      rec.lang = 'en-IN';
+      this.recognition = rec;
+
+      rec.onspeechstart = () => {
+        this.speechStartTs = performance.now();
+        if (this.state === 'speaking' && this.bargeInEnabled) {
+          this.stopAllAudio(false);
+          if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            this.ws.send(JSON.stringify({ type: 'interrupt' }));
+          }
+        }
+        if (this.state !== 'speaking') {
+          this.updateStatus('listening', 'Listening to you...');
+        }
+      };
+
+      rec.onresult = (event) => {
+        if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+        // If safe-mode (no barge-in) and assistant is speaking, ignore mic transcripts
+        if (!this.bargeInEnabled && (this.state === 'speaking' || this.activeSourceNodes.length > 0)) {
+          return;
+        }
+
+        let interimTranscript = '';
+        let finalTranscript = '';
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const res = event.results[i];
+          if (res.isFinal) {
+            finalTranscript += res[0].transcript + ' ';
+          } else {
+            interimTranscript += res[0].transcript;
+          }
+        }
+
+        if (interimTranscript.trim()) {
+          if (this.state === 'speaking' && this.bargeInEnabled) {
+            this.stopAllAudio(false);
+            this.ws.send(JSON.stringify({ type: 'interrupt' }));
+          }
+          this.updateStatus('listening', `Hearing: "${interimTranscript.trim()}"`);
+        }
+
+        const cleanFinal = finalTranscript.trim();
+        if (cleanFinal) {
+          const sttMs = Math.min(480, Math.max(35, Math.round(performance.now() - (this.speechStartTs || performance.now() - 120))));
+          this.updateStatus('thinking', 'Processing utterance...');
+          this.ws.send(JSON.stringify({
+            type: 'user_text_turn',
+            text: cleanFinal,
+            stt_ms: sttMs,
+          }));
+        }
+      };
+
+      rec.onerror = (event) => {
+        const err = event.error || '';
+        if (err === 'no-speech' || err === 'aborted') {
+          return;
+        }
+        console.warn('Browser SpeechRecognition fallback to local Whisper GPU due to:', err);
+        this.browserSttEnabled = false;
+        this.updateSttModeUI();
+        this.stopBrowserRecognition();
+        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+          this.ws.send(JSON.stringify({ type: 'set_browser_stt', enabled: false }));
+        }
+      };
+
+      rec.onend = () => {
+        if (this.recognition === rec && this.browserSttEnabled && this.state !== 'disconnected' && this.ws) {
+          try {
+            rec.start();
+          } catch (e) {}
+        }
+      };
+
+      rec.start();
+    } catch (err) {
+      console.warn('Could not start Browser SpeechRecognition, falling back to Whisper GPU:', err);
+      this.browserSttEnabled = false;
+      this.updateSttModeUI();
+      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+        this.ws.send(JSON.stringify({ type: 'set_browser_stt', enabled: false }));
+      }
+    }
+  }
+
+  stopBrowserRecognition() {
+    if (this.recognition) {
+      const oldRec = this.recognition;
+      this.recognition = null;
+      oldRec.onresult = null;
+      oldRec.onerror = null;
+      oldRec.onend = null;
+      oldRec.onspeechstart = null;
+      try {
+        oldRec.stop();
+      } catch (e) {}
     }
   }
 
@@ -236,6 +413,15 @@ class VoiceClient {
         this.connectBtnText.textContent = 'Stop Session';
         ws.send(JSON.stringify({ type: 'set_barge_in', enabled: this.bargeInEnabled }));
         ws.send(JSON.stringify({ type: 'set_noise_cancel', enabled: this.noiseCancelEnabled }));
+        ws.send(JSON.stringify({ type: 'set_browser_stt', enabled: this.browserSttEnabled }));
+        if (this.browserSttEnabled) {
+          this.startBrowserRecognition();
+        }
+        if (this.pendingTextCommand) {
+          const cmd = this.pendingTextCommand;
+          this.pendingTextCommand = null;
+          ws.send(JSON.stringify({ type: 'user_text_turn', text: cmd, stt_ms: 15 }));
+        }
       };
 
       ws.onmessage = (event) => {
@@ -262,6 +448,7 @@ class VoiceClient {
   }
 
   stop(silent = false) {
+    this.stopBrowserRecognition();
     if (this.workletNode) {
       try {
         if (this.workletNode.port) {

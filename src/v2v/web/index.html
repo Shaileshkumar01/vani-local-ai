@@ -10,7 +10,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/styles.css?v=6">
+  <link rel="stylesheet" href="/static/styles.css?v=7">
 </head>
 <body>
   <div class="app-container">
@@ -165,7 +165,10 @@
       <section class="dialogue-panel">
         <div class="panel-header">
           <h2>CONVERSATION TRANSCRIPT</h2>
-          <div style="display: flex; gap: 0.5rem; align-items: center;">
+          <div style="display: flex; gap: 0.45rem; align-items: center; flex-wrap: wrap;">
+            <button type="button" id="stt-mode-toggle" class="barge-in-badge" title="Switch between Browser Neural STT (ultra-low WER) and Local Whisper CUDA">
+              <span id="stt-mode-text">STT: Neural Web</span>
+            </button>
             <button type="button" id="noise-cancel-toggle" class="barge-in-badge" title="Toggle microphone Noise Cancellation & Noise Gate">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
@@ -183,9 +186,13 @@
         </div>
         <div class="messages-container" id="messages-container">
           <div class="system-welcome">
-            <p>Welcome! Speak into your microphone once connected. Your voice never leaves this machine.</p>
+            <p>Welcome! Speak into your microphone or type a command below.</p>
           </div>
         </div>
+        <form id="quick-cmd-form" class="quick-cmd-bar">
+          <input type="text" id="quick-cmd-input" placeholder="Speak or type any command (e.g., Create a LangGraph agent for research)..." autocomplete="off" />
+          <button type="submit" class="btn-send-cmd">Send</button>
+        </form>
       </section>
     </main>
 
@@ -202,6 +209,6 @@
     </footer>
   </div>
 
-  <script src="/static/app.js?v=6"></script>
+  <script src="/static/app.js?v=7"></script>
 </body>
 </html>

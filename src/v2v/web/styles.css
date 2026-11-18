@@ -864,6 +864,43 @@ body.mini-mode .mini-transcript-preview {
   border: 1px solid rgba(16, 185, 129, 0.45);
 }
 
+.quick-cmd-bar {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.quick-cmd-bar input {
+  flex: 1;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 10px;
+  padding: 0.65rem 0.9rem;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 0.88rem;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.quick-cmd-bar input:focus {
+  border-color: var(--accent-cyan);
+}
+
+.btn-send-cmd {
+  background: linear-gradient(135deg, var(--accent-cyan), var(--accent-blue));
+  color: #090b12;
+  border: none;
+  border-radius: 10px;
+  padding: 0.65rem 1.1rem;
+  font-weight: 700;
+  font-size: 0.85rem;
+  cursor: pointer;
+  font-family: inherit;
+}
+
 /* ---------------- Responsive ---------------- */
 @media (max-width: 960px) {
   .main-content {

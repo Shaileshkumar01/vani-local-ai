@@ -26,7 +26,9 @@ from .config import Config
 from .endpointing import TurnDecision, analyze_transcript, evaluate_endpoint
 from .engine import Engine
 from .metrics import TurnMetrics
+from .stt import normalize_transcript
 from .tools import strip_tool_tags
+from .tools.code_gen import intercept_and_save_llm_code
 from .vad import Utterance
 
 logger = logging.getLogger("v2v.session")
@@ -52,6 +54,7 @@ class VoiceSession:
         self.current_metrics: TurnMetrics | None = None
         self.playback_start_t = 0.0
         self.noise_cancel_enabled: bool = True
+        self.use_browser_stt: bool = False
 
         # Background worker threads
         self.vad_thread = threading.Thread(target=self._vad_worker, name="session-vad", daemon=True)
@@ -72,7 +75,7 @@ class VoiceSession:
 
     def feed_pcm16(self, pcm_data: bytes) -> None:
         """Called when browser sends raw 16kHz Int16 audio frames."""
-        if not self.active:
+        if not self.active or self.use_browser_stt:
             return
         arr = np.frombuffer(pcm_data, dtype=np.int16).astype(np.float32) / 32768.0
         if self.noise_cancel_enabled and arr.size > 0:
@@ -87,6 +90,13 @@ class VoiceSession:
             chunk = arr[i : i + frame_len]
             if len(chunk) == frame_len:
                 self.mic_q.put((time.perf_counter(), chunk))
+
+    def submit_text_turn(self, text: str, stt_ms: float = 45.0) -> None:
+        """Submit a pre-transcribed utterance (from Browser Neural STT or UI text bar)."""
+        clean = normalize_transcript(text or "")
+        if not self.active or not clean:
+            return
+        self.utt_q.put(("TEXT_TURN", clean, float(stt_ms), time.perf_counter()))
 
     def _send_json_sync(self, data: dict[str, Any]) -> None:
         if not self.active:
@@ -154,59 +164,68 @@ class VoiceSession:
     def _brain_worker(self) -> None:
         while self.active:
             try:
-                utt: Utterance = self.utt_q.get(timeout=0.2)
+                item = self.utt_q.get(timeout=0.2)
             except queue.Empty:
                 continue
 
-            tid = self.state.new_turn()
-            m = TurnMetrics(turn_id=tid, t_speech_end=utt.t_speech_end, t_endpoint=utt.t_endpoint)
-            self.current_metrics = m
+            if isinstance(item, tuple) and len(item) == 4 and item[0] == "TEXT_TURN":
+                _, text, stt_ms, t_now = item
+                tid = self.state.new_turn()
+                t_start = t_now - (stt_ms / 1000.0) - 0.05
+                m = TurnMetrics(turn_id=tid, t_speech_end=t_start, t_endpoint=t_now - (stt_ms / 1000.0))
+                m.t_stt_done = t_now
+                self.current_metrics = m
+            else:
+                utt: Utterance = item
+                tid = self.state.new_turn()
+                m = TurnMetrics(turn_id=tid, t_speech_end=utt.t_speech_end, t_endpoint=utt.t_endpoint)
+                self.current_metrics = m
 
-            # 1. Transcribe audio with faster-whisper
-            text = self.engine.stt.transcribe(utt.audio)
-            m.t_stt_done = time.perf_counter()
+                # 1. Transcribe audio with faster-whisper
+                text = self.engine.stt.transcribe(utt.audio)
+                m.t_stt_done = time.perf_counter()
 
-            if not text or not self.state.is_current(tid):
-                self._send_json_sync({"type": "status", "status": "ready"})
-                self.state.mark_idle()
-                continue
+                if not text or not self.state.is_current(tid):
+                    self._send_json_sync({"type": "status", "status": "ready"})
+                    self.state.mark_idle()
+                    continue
 
-            # 2. Adaptive Endpointing Evaluation
-            silence_ms = (m.t_stt_done - utt.t_speech_end) * 1000.0
-            decision, analysis = evaluate_endpoint(
-                text,
-                silence_ms=silence_ms,
-                min_silence_ms=self.cfg.vad.min_silence_ms,
-                extended_silence_ms=self.cfg.vad.extended_silence_ms,
-                filler_silence_ms=self.cfg.vad.filler_silence_ms,
-            )
+                # 2. Adaptive Endpointing Evaluation
+                silence_ms = (m.t_stt_done - utt.t_speech_end) * 1000.0
+                decision, analysis = evaluate_endpoint(
+                    text,
+                    silence_ms=silence_ms,
+                    min_silence_ms=self.cfg.vad.min_silence_ms,
+                    extended_silence_ms=self.cfg.vad.extended_silence_ms,
+                    filler_silence_ms=self.cfg.vad.filler_silence_ms,
+                )
 
-            # Case A: Discard fillers ("Mm", "Uh", "Um") and hallucinations without reply
-            if decision == TurnDecision.DISCARD:
-                logger.info("Discarding non-speech / filler utterance: %r", text)
-                self._send_json_sync({"type": "status", "status": "ready"})
-                self.state.mark_idle()
-                continue
+                # Case A: Discard fillers ("Mm", "Uh", "Um") and hallucinations without reply
+                if decision == TurnDecision.DISCARD:
+                    logger.info("Discarding non-speech / filler utterance: %r", text)
+                    self._send_json_sync({"type": "status", "status": "ready"})
+                    self.state.mark_idle()
+                    continue
 
-            # Case B: Wait briefly if incomplete / trailing connector ("or", "and", "because"...)
-            if decision == TurnDecision.WAIT:
-                wait_sec = max(0.05, (self.cfg.vad.extended_silence_ms - self.cfg.vad.min_silence_ms) / 1000.0)
-                try:
-                    next_utt: Utterance = self.utt_q.get(timeout=wait_sec)
-                    if self.state.is_current(tid):
-                        combined_audio = np.concatenate([utt.audio, next_utt.audio])
-                        utt = Utterance(combined_audio, next_utt.t_speech_end, next_utt.t_endpoint)
-                        text = self.engine.stt.transcribe(utt.audio)
-                        m.t_stt_done = time.perf_counter()
-                        analysis = analyze_transcript(text)
-                except queue.Empty:
-                    # Timeout passed without continuation; proceed with what was spoken
-                    pass
+                # Case B: Wait briefly if incomplete / trailing connector ("or", "and", "because"...)
+                if decision == TurnDecision.WAIT:
+                    wait_sec = max(0.05, (self.cfg.vad.extended_silence_ms - self.cfg.vad.min_silence_ms) / 1000.0)
+                    try:
+                        next_item = self.utt_q.get(timeout=wait_sec)
+                        if not isinstance(next_item, tuple) and self.state.is_current(tid):
+                            next_utt: Utterance = next_item
+                            combined_audio = np.concatenate([utt.audio, next_utt.audio])
+                            utt = Utterance(combined_audio, next_utt.t_speech_end, next_utt.t_endpoint)
+                            text = self.engine.stt.transcribe(utt.audio)
+                            m.t_stt_done = time.perf_counter()
+                            analysis = analyze_transcript(text)
+                    except queue.Empty:
+                        pass
 
-            if not text or not self.state.is_current(tid):
-                self._send_json_sync({"type": "status", "status": "ready"})
-                self.state.mark_idle()
-                continue
+                if not text or not self.state.is_current(tid):
+                    self._send_json_sync({"type": "status", "status": "ready"})
+                    self.state.mark_idle()
+                    continue
 
             self.state.mark_generating()
             m.user_text = text
@@ -245,11 +264,12 @@ class VoiceSession:
                         ctx = screen_tool.get_live_pc_context_snippet(user_text=text)
                         llm_prompt_text = f"{text}\n\n{ctx}"
 
-            # 3. Stream LLM tokens
+            # 3. Stream LLM tokens (suppressing raw code blocks from TTS/chat and saving to file instead)
             chunker = PhraseChunker(self.cfg.chunker)
             reply_tokens: list[str] = []
             ui_tag_buf: str = ""
             in_tag: bool = False
+            in_code_block: bool = False
 
             for tok in self.engine.llm.stream(self.conv.messages_for(llm_prompt_text)):
                 if not self.state.is_current(tid):
@@ -258,6 +278,11 @@ class VoiceSession:
                     m.t_llm_first_token = time.perf_counter()
 
                 reply_tokens.append(tok)
+                accum = "".join(reply_tokens)
+                if not in_code_block and ("```" in accum or "<!DOCTYPE" in accum or "<html" in accum.lower()):
+                    in_code_block = True
+                if in_code_block:
+                    continue
 
                 # Filter out [TOOL: ...] tags from UI agent_token stream
                 ui_tag_buf += tok
@@ -283,14 +308,24 @@ class VoiceSession:
                         m.t_first_phrase = time.perf_counter()
                     self.tts_q.put((tid, phrase, m, False))
 
-            if ui_tag_buf and self.state.is_current(tid):
+            raw_reply = "".join(reply_tokens).strip()
+            if in_code_block and self.state.is_current(tid):
+                spoken_file_msg, saved_path = intercept_and_save_llm_code(raw_reply, user_text=text)
+                if saved_path is not None:
+                    if m.t_first_phrase is None:
+                        m.t_first_phrase = time.perf_counter()
+                    self._send_json_sync({"type": "agent_token", "token": f" {spoken_file_msg}", "turn_id": tid})
+                    self.tts_q.put((tid, spoken_file_msg, m, False))
+                    raw_reply = spoken_file_msg
+
+            if not in_code_block and ui_tag_buf and self.state.is_current(tid):
                 cleaned_tail = strip_tool_tags(ui_tag_buf)
                 if cleaned_tail:
                     self._send_json_sync({"type": "agent_token", "token": cleaned_tail, "turn_id": tid})
 
             # Flush any remaining text in chunker
             tail = chunker.flush()
-            if tail and self.state.is_current(tid):
+            if not in_code_block and tail and self.state.is_current(tid):
                 if m.t_first_phrase is None:
                     m.t_first_phrase = time.perf_counter()
                 self.tts_q.put((tid, tail, m, False))

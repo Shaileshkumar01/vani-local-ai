@@ -11,13 +11,35 @@ from .cuda_setup import add_cuda_dll_dirs
 logger = logging.getLogger("v2v.stt")
 
 _DEFAULT_INITIAL_PROMPT = (
-    "Vāṇī voice assistant on Windows PC. "
-    "What is on my screen? Read my screen. What do you see on the screen? "
-    "Which applications are open? Which tasks are running in the background? "
-    "What windows do I have open? Play song on Spotify. Pause the music. Switch to window."
+    "Vāṇī voice assistant for Shailesh on Windows PC. "
+    "Create a simple HTML file for a portfolio site. Create a LangGraph agent for task automation. "
+    "Explain LangChain and StateGraph. Locate Shailesh EOD report. "
+    "Write a Python script for binary search. Play song on Spotify."
 )
 
-_DEFAULT_HOTWORDS = "Vāṇī, screen, applications, tasks, windows, background, desktop, Spotify, pause, resume"
+_DEFAULT_HOTWORDS = "Vāṇī, Shailesh, EOD, LangGraph, LangChain, StateGraph, HTML, portfolio, Python, Spotify"
+
+_PHONETIC_FIXES = [
+    ("shellish", "Shailesh"),
+    ("shellfish", "Shailesh"),
+    ("chalice", "Shailesh"),
+    ("land graph", "LangGraph"),
+    ("lang graph", "LangGraph"),
+    ("line graph", "LangGraph"),
+    ("land chain", "LangChain"),
+    ("lang chain", "LangChain"),
+]
+
+
+def normalize_transcript(text: str) -> str:
+    import re
+
+    out = (text or "").strip()
+    for wrong, right in _PHONETIC_FIXES:
+        if wrong in out.lower():
+            out = re.sub(rf"\b{re.escape(wrong)}\b", right, out, flags=re.IGNORECASE)
+    return out
+
 
 
 class WhisperSTT:
@@ -64,4 +86,10 @@ class WhisperSTT:
             if s.no_speech_prob > 0.65 and s.avg_logprob < -1.0:
                 continue
             parts.append(s.text.strip())
-        return " ".join(parts).strip()
+        out = " ".join(parts).strip()
+        for wrong, right in _PHONETIC_FIXES:
+            if wrong in out.lower():
+                import re
+
+                out = re.sub(rf"\b{re.escape(wrong)}\b", right, out, flags=re.IGNORECASE)
+        return out

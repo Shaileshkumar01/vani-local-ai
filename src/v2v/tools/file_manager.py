@@ -124,10 +124,16 @@ class FileManagerTool(BaseTool):
         )
 
     def _find_file(self, query: str, open_match: bool = True) -> ToolResult:
+        q_norm = (
+            query.lower()
+            .replace("shellish", "shailesh")
+            .replace("shellfish", "shailesh")
+            .replace("chalice", "shailesh")
+        )
         clean_q = re.sub(
-            r"\b(?:my|the|a|file|files|document|named|called|please)\b",
+            r"\b(?:i|need|want|you|to|find|locate|open|search|for|my|the|a|an|file|files|document|named|called|please|on|pc|desktop)\b",
             " ",
-            query.lower(),
+            q_norm,
         )
         tokens = [t for t in re.findall(r"[a-z0-9]+", clean_q) if len(t) >= 2]
         if not tokens:
@@ -135,7 +141,7 @@ class FileManagerTool(BaseTool):
 
         scored: list[tuple[float, Path]] = []
         for root in _search_roots():
-            for f in _iter_files_shallow(root, max_depth=2):
+            for f in _iter_files_shallow(root, max_depth=3):
                 if f.suffix.lower() in (".ini", ".tmp"):
                     continue
                 fname_low = f.name.lower()
