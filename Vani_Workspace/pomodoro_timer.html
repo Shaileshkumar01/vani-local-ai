@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>A Pomodoro Timer — Built by Vāṇī AI</title>
+  <style>
+    body { font-family: system-ui, sans-serif; background: #090b12; color: #f8fafc; display: grid; place-items: center; min-height: 100vh; margin: 0; }
+    .card { background: #111626; border: 1px solid #00f2fe44; border-radius: 18px; padding: 2.5rem; text-align: center; box-shadow: 0 0 40px #00f2fe22; }
+    h1 { margin: 0 0 1rem; color: #00f2fe; }
+    #clock { font-size: 4rem; font-weight: 700; margin: 1rem 0; }
+    button { background: #00f2fe; color: #090b12; border: none; padding: 0.75rem 1.5rem; border-radius: 10px; font-weight: 700; cursor: pointer; margin: 0 0.4rem; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>A Pomodoro Timer</h1>
+    <div id="clock">25:00</div>
+    <button onclick="startTimer()">Start</button>
+    <button onclick="resetTimer()">Reset</button>
+  </div>
+  <script>
+    let secs = 1500, timer = null;
+    function render() {
+      const m = String(Math.floor(secs / 60)).padStart(2, '0');
+      const s = String(secs % 60).padStart(2, '0');
+      document.getElementById('clock').textContent = `${m}:${s}`;
+    }
+    function startTimer() {
+      if (timer) return;
+      timer = setInterval(() => { if (secs > 0) { secs--; render(); } }, 1000);
+    }
+    function resetTimer() { clearInterval(timer); timer = null; secs = 1500; render(); }
+  </script>
+</body>
+</html>

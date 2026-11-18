@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import queue
+import re
 import struct
 import threading
 import time
@@ -227,6 +228,13 @@ class VoiceSession:
                     self.state.mark_idle()
                     continue
 
+            # Ignore name-only turns ("Vāṇī.", "Vāṇī, Shailesh.") caused by speaker echo / Whisper prompt bleed
+            if self.engine.tools.is_name_only_utterance(text):
+                print(f"  [route] ignored name-only utterance: {text!r}", flush=True)
+                self._send_json_sync({"type": "status", "status": "ready"})
+                self.state.mark_idle()
+                continue
+
             self.state.mark_generating()
             m.user_text = text
             self._send_json_sync({"type": "user_transcript", "text": text, "turn_id": tid})
@@ -237,10 +245,24 @@ class VoiceSession:
                 text,
                 last_assistant_text=last_assistant,
             )
+            if fast_res is None:
+                print(f"  [route] {text!r} -> LLM", flush=True)
+            else:
+                print(f"  [route] {text!r} -> TOOL: {fast_res.message[:110]!r}", flush=True)
             if fast_res is not None and fast_res.spoken_response and not fast_res.llm_context:
                 m.t_llm_first_token = time.perf_counter()
                 m.t_first_phrase = m.t_llm_first_token
-                self._send_json_sync({"type": "agent_token", "token": fast_res.spoken_response, "turn_id": tid})
+                data = fast_res.data or {}
+                display_text = data.get("display_text") or fast_res.spoken_response
+                self._send_json_sync({"type": "agent_token", "token": display_text, "turn_id": tid})
+                code_disp = data.get("code_display")
+                if code_disp:
+                    self._send_json_sync({
+                        "type": "agent_code",
+                        "filename": code_disp.get("filename", ""),
+                        "code": code_disp.get("code", ""),
+                        "turn_id": tid,
+                    })
                 self.tts_q.put((tid, fast_res.spoken_response, m, False))
                 self.tts_q.put((tid, None, m, True))
                 m.reply_text = fast_res.spoken_response
@@ -248,6 +270,13 @@ class VoiceSession:
                 continue
 
             llm_prompt_text = f"{text}\n\n{fast_res.llm_context}" if (fast_res and fast_res.llm_context) else text
+
+            # 2a. Ground follow-ups about files in the real last-file path (prevents invented locations)
+            _file_words = {"file", "folder", "where", "located", "location", "saved", "path", "code", "script", "agent", "app", "page", "website"}
+            _words_now = set(re.findall(r"[a-z]+", text.lower()))
+            lf_ctx = self.engine.tools.last_file_context()
+            if lf_ctx and (_words_now & _file_words):
+                llm_prompt_text = f"{llm_prompt_text}\n\n{lf_ctx}"
 
             # 2c. Live PC & background-task context injection when asking PC/app/task follow-ups
             if fast_res is None:
@@ -312,6 +341,7 @@ class VoiceSession:
             if in_code_block and self.state.is_current(tid):
                 spoken_file_msg, saved_path = intercept_and_save_llm_code(raw_reply, user_text=text)
                 if saved_path is not None:
+                    self.engine.tools.set_last_file(str(saved_path))
                     if m.t_first_phrase is None:
                         m.t_first_phrase = time.perf_counter()
                     self._send_json_sync({"type": "agent_token", "token": f" {spoken_file_msg}", "turn_id": tid})

@@ -17,7 +17,9 @@ class VoiceClient {
     this.bargeInEnabled = true;
     this.noiseCancelEnabled = true;
     this.SpeechRecognitionClass = window.SpeechRecognition || window.webkitSpeechRecognition || null;
-    this.browserSttEnabled = Boolean(this.SpeechRecognitionClass);
+    // Browser neural STT needs internet + is flaky inside the Edge app window, so it is opt-in.
+    // Local Whisper GPU is the reliable default (user can toggle; choice is remembered).
+    this.browserSttEnabled = Boolean(this.SpeechRecognitionClass) && localStorage.getItem('vani_stt_mode') === 'browser';
     this.recognition = null;
     this.speechStartTs = 0;
     this.pendingTextCommand = null;
@@ -130,6 +132,7 @@ class VoiceClient {
           return;
         }
         this.browserSttEnabled = !this.browserSttEnabled;
+        try { localStorage.setItem('vani_stt_mode', this.browserSttEnabled ? 'browser' : 'whisper'); } catch (e) {}
         this.updateSttModeUI();
         if (this.ws && this.ws.readyState === WebSocket.OPEN) {
           this.ws.send(JSON.stringify({ type: 'set_browser_stt', enabled: this.browserSttEnabled }));
@@ -604,6 +607,12 @@ class VoiceClient {
         }
         break;
 
+      case 'agent_code':
+        if (this.currentAgentBubble) {
+          this.appendAgentCode(data.filename, data.code);
+        }
+        break;
+
       case 'interrupt':
         this.stopAllAudio();
         if (data.new_turn_id) {
@@ -785,6 +794,38 @@ class VoiceClient {
       }
       this.scrollDialogue();
     }
+  }
+
+  appendAgentCode(filename, code) {
+    if (!this.currentAgentBubble) return;
+    const body = this.currentAgentBubble.querySelector('.bubble-body');
+    if (!body) return;
+    const wrap = document.createElement('div');
+    wrap.className = 'code-block';
+    const head = document.createElement('div');
+    head.className = 'code-block-head';
+    head.textContent = filename || 'code';
+    const copyBtn = document.createElement('button');
+    copyBtn.type = 'button';
+    copyBtn.className = 'code-copy-btn';
+    copyBtn.textContent = 'Copy';
+    copyBtn.addEventListener('click', () => {
+      try {
+        navigator.clipboard.writeText(code || '');
+        copyBtn.textContent = 'Copied';
+        setTimeout(() => (copyBtn.textContent = 'Copy'), 1200);
+      } catch (e) {}
+    });
+    head.appendChild(copyBtn);
+    const pre = document.createElement('pre');
+    const codeEl = document.createElement('code');
+    codeEl.textContent = code || '';
+    pre.appendChild(codeEl);
+    wrap.appendChild(head);
+    wrap.appendChild(pre);
+    const cursor = body.querySelector('.typing-cursor');
+    body.insertBefore(wrap, cursor || null);
+    this.scrollDialogue();
   }
 
   markInterrupted(bubble) {

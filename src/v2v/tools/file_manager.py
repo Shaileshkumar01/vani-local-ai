@@ -118,9 +118,127 @@ class FileManagerTool(BaseTool):
                 str(kwargs.get("target", "downloads")),
                 dry_run=bool(kwargs.get("dry_run", False)),
             )
+        if action == "list_folder":
+            return self._list_folder(
+                str(kwargs.get("target", "downloads")),
+                limit=int(kwargs.get("limit", 5) or 5),
+            )
+        if action == "reveal_file":
+            return self._reveal_file(
+                str(kwargs.get("path", "")),
+                open_explorer=bool(kwargs.get("open_explorer", True)),
+            )
         return self._find_file(
             str(kwargs.get("query", "")),
             open_match=bool(kwargs.get("open_match", True)),
+        )
+
+    # ------------------------------------------------------------ list folder
+    @staticmethod
+    def _resolve_listing_folder(target: str) -> Path | None:
+        t = (target or "").lower()
+        home = Path(os.path.expandvars("%USERPROFILE%"))
+        project_root = Path(__file__).resolve().parents[3]
+        if "workspace" in t:
+            for p in (home / "OneDrive" / "Desktop" / "Vani_Workspace", home / "Desktop" / "Vani_Workspace", project_root / "Vani_Workspace"):
+                if p.exists():
+                    return p
+            return None
+        if t.strip() in ("docs", "docs folder", "project docs"):
+            p = project_root / "docs"
+            return p if p.exists() else None
+        if "desktop" in t:
+            candidates = [home / "OneDrive" / "Desktop", home / "Desktop"]
+        elif "document" in t:
+            candidates = [home / "OneDrive" / "Documents", home / "Documents"]
+        elif "download" in t:
+            candidates = [home / "Downloads"]
+        elif "picture" in t or "photo" in t:
+            candidates = [home / "OneDrive" / "Pictures", home / "Pictures"]
+        else:
+            return None
+        for p in candidates:
+            if p.exists() and p.is_dir():
+                return p
+        return None
+
+    def _list_folder(self, target: str, limit: int = 5) -> ToolResult:
+        folder = self._resolve_listing_folder(target)
+        if folder is None:
+            spoken = f"I couldn't find a {target} folder on your PC."
+            return ToolResult(False, spoken, spoken_response=spoken)
+
+        files: list[Path] = []
+        sub_dirs = 0
+        try:
+            for entry in folder.iterdir():
+                name_low = entry.name.lower()
+                if name_low.startswith((".", "~$")) or name_low in ("desktop.ini", "thumbs.db"):
+                    continue
+                if entry.is_dir():
+                    sub_dirs += 1
+                elif entry.is_file() and entry.suffix.lower() not in _SKIP_EXTENSIONS:
+                    files.append(entry)
+        except PermissionError:
+            spoken = f"I don't have permission to read your {folder.name} folder."
+            return ToolResult(False, spoken, spoken_response=spoken)
+
+        def _mtime(p: Path) -> float:
+            try:
+                return p.stat().st_mtime
+            except OSError:
+                return 0.0
+
+        files.sort(key=_mtime, reverse=True)
+        limit = max(1, min(limit, 10))
+        top = files[:limit]
+        label = folder.name
+        if not top:
+            spoken = f"Your {label} folder has no files right now" + (f", only {sub_dirs} subfolders." if sub_dirs else ".")
+            return ToolResult(True, spoken, spoken_response=spoken, data={"folder": str(folder), "files": []})
+
+        names = [p.name for p in top]
+        if len(names) == 1:
+            joined = names[0]
+        else:
+            joined = ", ".join(names[:-1]) + f", and {names[-1]}"
+        spoken = (
+            f"Your {label} folder has {len(files)} file{'s' if len(files) != 1 else ''}"
+            + (f" and {sub_dirs} subfolder{'s' if sub_dirs != 1 else ''}" if sub_dirs else "")
+            + f". The {len(top)} most recent {'are' if len(top) != 1 else 'is'}: {joined}."
+        )
+        return ToolResult(
+            True,
+            spoken,
+            spoken_response=spoken,
+            data={"folder": str(folder), "files": [str(p) for p in top], "total": len(files)},
+        )
+
+    # ------------------------------------------------------------ reveal file
+    def _reveal_file(self, path: str, open_explorer: bool = True) -> ToolResult:
+        if not path:
+            spoken = "I haven't created or opened any file yet in this session, so there's nothing to locate."
+            return ToolResult(False, spoken, spoken_response=spoken)
+        p = Path(path)
+        if not p.exists():
+            spoken = f"The file {p.name} no longer exists at its saved location."
+            return ToolResult(False, spoken, spoken_response=spoken, data={"path": path})
+        if open_explorer and os.name == "nt":
+            try:
+                import subprocess
+
+                subprocess.Popen(["explorer", "/select,", str(p)])
+            except Exception as e:
+                logger.warning("Could not reveal %s in Explorer: %s", p, e)
+        spoken = (
+            f"{p.name} is saved in the {p.parent.name} folder"
+            + (", and I've opened that folder with the file highlighted." if open_explorer else ".")
+        )
+        return ToolResult(
+            True,
+            spoken,
+            spoken_response=spoken,
+            data={"path": str(p), "display_text": f"{spoken}\nFull path: {p}"},
         )
 
     def _find_file(self, query: str, open_match: bool = True) -> ToolResult:

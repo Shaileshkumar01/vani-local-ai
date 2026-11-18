@@ -545,10 +545,18 @@ def intercept_and_save_llm_code(raw_reply: str, user_text: str = "") -> tuple[st
         return raw_reply, None
 
     ws = get_workspace_dir()
-    slug = re.sub(r"[^a-z0-9]+", "_", (user_text or "generated").lower()).strip("_")[:24] or "generated"
     is_html = lang in ("html", "htm", "xml") or code_content.lstrip().lower().startswith(("<!doctype", "<html"))
     ext = ".html" if is_html else ".py"
-    out_path = ws / f"vani_{slug}{ext}"
+    # Name the file after what the code actually is (function/class/<title>), never after the user's sentence
+    name_hint = ""
+    m_title = re.search(r"<title>\s*([^<]{2,60})</title>", code_content, re.IGNORECASE)
+    m_def = re.search(r"^\s*(?:def|class)\s+([A-Za-z_][A-Za-z0-9_]*)", code_content, re.MULTILINE)
+    if is_html and m_title:
+        name_hint = m_title.group(1)
+    elif m_def and m_def.group(1) not in ("main", "__init__"):
+        name_hint = m_def.group(1)
+    slug = re.sub(r"[^a-z0-9]+", "_", name_hint.lower()).strip("_")[:28] or "generated_snippet"
+    out_path = ws / f"{slug}{ext}"
     out_path.write_text(code_content + "\n", encoding="utf-8")
     open_file_in_editor(out_path, also_open_browser=is_html)
 

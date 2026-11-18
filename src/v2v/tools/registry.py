@@ -183,7 +183,7 @@ _DOC_RAG_QUERY_RE = re.compile(
     r"(?:search|check|read|look\s+in)\s+(?:my|the)\s+(?:document|documents|doc|docs|report|project\s+report|notes|pdf)|"
     r"what\s+does\s+(?:my|the)\s+(?:document|documents|report|project\s+report|notes|pdf)\s+say|"
     r"summarize\s+(?:my|the)\s+(?:document|documents|report|project\s+report|notes|pdf)|"
-    r"in\s+(?:my|the)\s+(?:project\s+report|document|documents|notes|pdf)|"
+    r"in\s+(?:my|the)\s+(?:project\s+report|notes|pdf)\b|"
     r"(?:what\s+is|explain|tell\s+me\s+about|how\s+does)\s+(?:lang\s*graph|lang\s*chain|state\s*graph|lcel|react\s+agent))\b",
     re.IGNORECASE,
 )
@@ -210,10 +210,45 @@ _CODE_GEN_PY_RE = re.compile(
     re.IGNORECASE,
 )
 _CODE_GEN_HTML_RE = re.compile(
-    r"\b(?:(?:write|generate|create|make|build)\s+(?:a\s+|an\s+|the\s+)?(?:simple\s+|new\s+|modern\s+)?(?:html\s+(?:page|file|code|site)|web\s*page|website|portfolio(?:\s+site|\s+page)?|landing\s+page)(?:\s+(?:for|about|of|to))?\s*(?P<topic>[a-zA-Z0-9\s._-]{0,60}?)|"
-    r"^(?:an?\s+)?(?:simple\s+)?(?:html\s+(?:file|page)|web\s*page|website)\s+(?:for|about|of)\s+(?P<topic2>[a-zA-Z0-9\s._-]{2,50}?))[.!?]*$",
+    r"\b(?:(?:write|generate|create|make|build|develop|code)\s+(?:me\s+)?(?:a\s+|an\s+|the\s+)?(?:simple\s+|new\s+|modern\s+|small\s+|basic\s+)?(?:html\s+(?:page|file|code|site|app)|web\s*page|web\s*app(?:lication)?|website|portfolio(?:\s+site|\s+page)?|landing\s+page)(?:\s+(?:for|about|of|to|with))?\s*(?P<topic>[a-zA-Z0-9\s._-]{0,60}?)|"
+    r"^(?:an?\s+)?(?:simple\s+)?(?:html\s+(?:file|page)|web\s*page|web\s*app|website)\s+(?:for|about|of)\s+(?P<topic2>[a-zA-Z0-9\s._-]{2,50}?))[.!?]*$",
     re.IGNORECASE,
 )
+
+# "Where is it located?" / "What's the file location?" / "Open the folder" -> uses last created/found file
+_WHERE_FILE_RE = re.compile(
+    r"\b(?:where\s+(?:is|was)\s+(?:it|that|this|the\s+(?:file|agent|script|app|page|code|website))\b|"
+    r"where(?:'s|\s+is)\s+(?:it|that|the\s+file)|"
+    r"(?:file|folder)\s+(?:location|path)|location\s+of\s+(?:the|that|this|it)|path\s+(?:of|to)\s+(?:the|that|this|it)|"
+    r"where\b.{0,30}\b(?:saved|located|stored|built|build|created|create|put|kept)|"
+    r"(?:open|show)\s+(?:me\s+)?(?:the|that|its|containing)\s+folder|show\s+(?:me\s+)?(?:it|the\s+file)\s+in\s+(?:explorer|the\s+folder))",
+    re.IGNORECASE,
+)
+
+# "Can you provide/show the code in chat?" -> shows last file's code in the transcript (not spoken)
+_SHOW_CODE_RE = re.compile(
+    r"\b(?:show|provide|give|display|print|paste|put|send|share|write)\b.{0,25}\b(?:the\s+|that\s+|its\s+)?(?:code|script|source|contents?)\b.{0,25}\b(?:in\s+(?:the\s+)?(?:chat|here|transcript|conversation)|here)\b|"
+    r"\b(?:show|read)\s+me\s+(?:the\s+|that\s+)?(?:code|source)\b|\bwhat(?:'s|\s+is)\s+in\s+(?:the\s+|that\s+)?(?:file|script)\b",
+    re.IGNORECASE,
+)
+
+# "What are the top five documents in my downloads folder?" / "What's on my desktop?" -> real folder listing
+_LIST_FOLDER_TARGET_RE = re.compile(
+    r"\b(?P<folder>downloads?(?:\s+folder)?|documents\s+folder|my\s+documents|desktop(?:\s+folder)?|"
+    r"vani\s*workspace|workspace(?:\s+folder)?|docs\s+folder|pictures(?:\s+folder)?)\b",
+    re.IGNORECASE,
+)
+_LIST_FOLDER_TRIGGER_RE = re.compile(
+    r"\b(?:what|which|list|show|tell|see|top|recent|latest|newest|files?|documents?|anything|else|inside|contain|contents?|how\s+many)\b",
+    re.IGNORECASE,
+)
+_NUMBER_WORDS = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+    "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+}
+
+# Pure wake-word / name-only utterances (speaker echo or Whisper prompt bleed) -> ignore silently
+_NAME_ONLY_TOKENS = {"vani", "vāṇī", "vaani", "vanni", "shailesh", "vāṇi", "vaṇī"}
 
 # Tool 5: Persistent Personal Memory & Voice Timer patterns
 _REMEMBER_RE = re.compile(
@@ -327,6 +362,8 @@ class ToolRegistry:
         self.register(CommsTool())
         self.register(CodeGenTool())
         self.register(MemoryTimerTool())
+        # Path of the last file Vāṇī created / found / opened (for "where is it?" and "show the code")
+        self.last_file: str | None = None
 
     def register(self, tool: BaseTool) -> None:
         self._tools[tool.name] = tool
@@ -334,11 +371,74 @@ class ToolRegistry:
     def get(self, name: str) -> BaseTool | None:
         return self._tools.get(name)
 
+    def set_last_file(self, path: str | None) -> None:
+        if path:
+            self.last_file = str(path)
+
     def execute(self, name: str, **kwargs: Any) -> ToolResult:
         tool = self.get(name)
         if not tool:
             return ToolResult(False, f"Tool '{name}' is not registered.")
-        return tool.execute(**kwargs)
+        result = tool.execute(**kwargs)
+        if result.success and result.data and result.data.get("path"):
+            self.set_last_file(result.data["path"])
+        return result
+
+    @staticmethod
+    def is_name_only_utterance(text: str) -> bool:
+        """True for utterances like 'Vāṇī.' or 'Vāṇī, Shailesh.' (speaker echo / prompt bleed)."""
+        toks = [t for t in re.split(r"[\s,.!?;:]+", (text or "").lower()) if t]
+        return bool(toks) and all(t in _NAME_ONLY_TOKENS for t in toks)
+
+    def last_file_context(self) -> str:
+        """Short grounding snippet for the LLM so it never invents file locations."""
+        if not self.last_file:
+            return ""
+        return (
+            f"[CONTEXT] The last file you created or opened is {self.last_file}. "
+            "If the user asks about its location, give exactly this path. Never invent file names or folders."
+        )
+
+    def _show_last_code(self) -> ToolResult:
+        from pathlib import Path
+
+        if not self.last_file or not Path(self.last_file).exists():
+            spoken = "I haven't created any code file in this session yet. Ask me to write one first."
+            return ToolResult(False, spoken, spoken_response=spoken)
+        p = Path(self.last_file)
+        try:
+            code = p.read_text(encoding="utf-8", errors="replace")
+        except Exception as e:
+            spoken = f"I couldn't read {p.name}: {e}"
+            return ToolResult(False, spoken, spoken_response=spoken)
+        truncated = len(code) > 6000
+        if truncated:
+            code = code[:6000] + "\n... (truncated, full file is open in your editor)"
+        spoken = f"Here's the code from {p.name}. I've put it in the chat for you."
+        return ToolResult(
+            True,
+            spoken,
+            spoken_response=spoken,
+            data={"code_display": {"filename": p.name, "code": code}},
+        )
+
+    def _match_list_folder(self, text: str) -> ToolResult | None:
+        t_low = text.lower()
+        if re.match(r"^\s*(?:please\s+)?(?:find|locate|open|search\s+for)\b", t_low) or re.search(
+            r"\b(?:organi[sz]e|clean\s+up|sort)\b", t_low
+        ):
+            return None
+        m_target = _LIST_FOLDER_TARGET_RE.search(text)
+        if not m_target or not _LIST_FOLDER_TRIGGER_RE.search(text):
+            return None
+        limit = 5
+        m_num = re.search(r"\b(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten)\b", t_low)
+        if m_num:
+            raw = m_num.group(1)
+            limit = int(raw) if raw.isdigit() else _NUMBER_WORDS.get(raw, 5)
+        folder = m_target.group("folder").lower()
+        logger.info("Fast-path tool match: list_folder target=%r limit=%d", folder, limit)
+        return self.execute("file_manager", action="list_folder", target=folder, limit=limit)
 
     def match_fast_intent(
         self,
@@ -369,6 +469,19 @@ class ToolRegistry:
         if _LIST_WINDOWS_RE.search(text):
             logger.info("Fast-path tool match: list_windows for %r", text)
             return self.execute("screen_tasks", action="list_windows")
+
+        # 0a-pre. Follow-ups about the last created/found file, and real folder listings
+        if _SHOW_CODE_RE.search(text):
+            logger.info("Fast-path tool match: show_last_code for %r", text)
+            return self._show_last_code()
+
+        if _WHERE_FILE_RE.search(text):
+            logger.info("Fast-path tool match: reveal_file (%s) for %r", self.last_file, text)
+            return self.execute("file_manager", action="reveal_file", path=self.last_file or "")
+
+        list_res = self._match_list_folder(text)
+        if list_res is not None:
+            return list_res
 
         # 0a. Local Document / PDF RAG
         if _DOC_RAG_LIST_RE.search(text):

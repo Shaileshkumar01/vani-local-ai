@@ -17,7 +17,7 @@ _DEFAULT_INITIAL_PROMPT = (
     "Write a Python script for binary search. Play song on Spotify."
 )
 
-_DEFAULT_HOTWORDS = "Vāṇī, Shailesh, EOD, LangGraph, LangChain, StateGraph, HTML, portfolio, Python, Spotify"
+_DEFAULT_HOTWORDS = "Vāṇī, Shailesh, EOD, LangGraph, LangChain, StateGraph, HTML, portfolio, Python, Spotify, Pomodoro, Downloads"
 
 _PHONETIC_FIXES = [
     ("shellish", "Shailesh"),
@@ -28,6 +28,12 @@ _PHONETIC_FIXES = [
     ("line graph", "LangGraph"),
     ("land chain", "LangChain"),
     ("lang chain", "LangChain"),
+    ("compute auto", "Pomodoro"),
+    ("computer auto", "Pomodoro"),
+    ("pomo doro", "Pomodoro"),
+    ("pomodora", "Pomodoro"),
+    ("palm a doro", "Pomodoro"),
+    ("pomadoro", "Pomodoro"),
 ]
 
 
@@ -87,9 +93,4 @@ class WhisperSTT:
                 continue
             parts.append(s.text.strip())
         out = " ".join(parts).strip()
-        for wrong, right in _PHONETIC_FIXES:
-            if wrong in out.lower():
-                import re
-
-                out = re.sub(rf"\b{re.escape(wrong)}\b", right, out, flags=re.IGNORECASE)
-        return out
+        return normalize_transcript(out)
